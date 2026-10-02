@@ -304,9 +304,11 @@ if os.path.exists(ZIP_FILE_PATH):
                 value=f"{selected_db_name}_Extract"
             )
             
+            # 💡 기기 호환성 변환 옵션 (600을 기본값으로, 라벨을 직관적으로 변경)
             target_machine = st.radio(
-                "기기 호환성 변환 (XML을 불러올 Datacolor 장비 모델에 맞게 선택하세요):",
-                ["변환 안 함 (원본 유지)", "Datacolor 600", "Datacolor 800", "Datacolor 1000"],
+                "기기 호환성 변환 (거래처 배포 시 범용인 '600'을 권장합니다):",
+                ["Datacolor 600 (범용/거래처 배포용)", "Datacolor 800", "Datacolor 1000", "변환 안 함 (원본 유지)"],
+                index=0, # 첫 번째 항목인 600을 기본 체크 상태로 만듭니다.
                 horizontal=True
             )
             
@@ -359,8 +361,16 @@ if os.path.exists(ZIP_FILE_PATH):
                                             if elem.text == old_id:
                                                 elem.text = new_set_name
 
+                            # 3. 💡 기기 호환성(MODEL) 강제 변환
                             if target_machine != "변환 안 함 (원본 유지)":
-                                new_model = target_machine.replace("Datacolor ", "")
+                                # "Datacolor 600 (범용...)" 이라는 글자에서 숫자만 추출
+                                if "600" in target_machine:
+                                    new_model = "600"
+                                elif "800" in target_machine:
+                                    new_model = "800"
+                                elif "1000" in target_machine:
+                                    new_model = "1000"
+                                    
                                 for inst in new_root.iter('Instrument'):
                                     model_node = inst.find('MODEL')
                                     if model_node is not None:
