@@ -2,10 +2,9 @@ import streamlit as st
 import xml.etree.ElementTree as ET
 import pandas as pd
 import io
-import copy
 import os
 import zipfile
-import re
+import re  # 메모장처럼 텍스트를 자르기 위한 모듈
 
 st.set_page_config(page_title="염료 데이터 추출기", layout="wide")
 
@@ -38,7 +37,6 @@ def load_excel_mapping(db_name):
                     xml_name = str(row[1]).strip()
                     orig_name = str(row[2]).strip()
                     group_name = str(row[3]).strip() if len(row) > 3 and pd.notna(row[3]) else "미지정"
-                    
                     mapping[xml_name] = orig_name
                     if orig_name not in order_map:
                         order_map[orig_name] = idx
@@ -51,7 +49,6 @@ def load_excel_mapping(db_name):
                     xml_name = str(row[1]).strip()
                     orig_name = str(row[3]).strip()
                     group_name = str(row[4]).strip() if len(row) > 4 and pd.notna(row[4]) else "미지정"
-                    
                     mapping[xml_name] = orig_name
                     if orig_name not in order_map:
                         order_map[orig_name] = idx
@@ -64,7 +61,6 @@ def load_excel_mapping(db_name):
                     xml_name = str(row[2]).strip()
                     orig_name = str(row[3]).strip()
                     group_name = str(row[4]).strip() if len(row) > 4 and pd.notna(row[4]) else "미지정"
-                    
                     mapping[xml_name] = orig_name
                     if orig_name not in order_map:
                         order_map[orig_name] = idx
@@ -77,7 +73,6 @@ def load_excel_mapping(db_name):
 
 def generate_qtx_files(selected_pids, root, dye_mapping):
     qtx_dict = {} 
-    
     samples_data = {}
     for sample in root.iter('Sample'):
         s_id_node = sample.find('SAMPLEID')
@@ -85,19 +80,16 @@ def generate_qtx_files(selected_pids, root, dye_mapping):
         if s_id_node is not None and s_name_node is not None:
             s_id = s_id_node.text.strip()
             s_name = s_name_node.text.strip()
-            
             spectrum_dict = {}
             for spec in sample.iter('Spectrum'):
                 wl = spec.find('WAVELENGTH')
                 val = spec.find('SPECTRUMVALUE')
                 if wl is not None and val is not None:
                     spectrum_dict[int(wl.text.strip())] = float(val.text.strip()) * 100
-            
             samples_data[s_id] = {'name': s_name, 'spectrum': spectrum_dict}
 
     for pid in selected_pids:
         qtx_lines = ["[VERSION]", "QTX=QTX 1.0", "", "[DATAMETRIC]", "DATAMETRIC=1", ""]
-        
         calib_node = None
         for calib in root.iter('Calibration'):
             pid_node = calib.find('PRODUCT_ID')
@@ -114,12 +106,10 @@ def generate_qtx_files(selected_pids, root, dye_mapping):
                     if s_id in samples_data:
                         series_list.append(samples_data[s_id])
             
-            if not series_list:
-                continue
+            if not series_list: continue
                 
             first_sample_spec = series_list[0]['spectrum']
-            if not first_sample_spec:
-                continue
+            if not first_sample_spec: continue
                 
             wls = sorted(first_sample_spec.keys())
             min_wl = min(wls)
@@ -179,11 +169,11 @@ if os.path.exists(ZIP_FILE_PATH):
         with zipfile.ZipFile(ZIP_FILE_PATH, 'r') as z:
             xml_filename = z.namelist()[0]
             with z.open(xml_filename) as xml_file:
+                # 검색용 데이터 추출 (XML 훼손 없이 읽기만 수행)
                 tree = ET.parse(xml_file)
                 root = tree.getroot()
 
         dye_mapping = {}
-        
         for elem in root.iter('Product'):
             pid_node = elem.find('PRODUCT_ID')
             pname_node = elem.find('PRODUCT_NAME')
@@ -212,14 +202,9 @@ if os.path.exists(ZIP_FILE_PATH):
                 unique_groups.add(grp)
             
             st.sidebar.header(":material/search: 염료 검색 및 필터")
-            
             selected_groups = st.sidebar.multiselect(
-                "염료군(그룹) 필터:",
-                options=sorted(list(unique_groups)),
-                default=[],
-                help="원하는 염료군을 선택하면 해당 그룹의 염료만 나타납니다."
+                "염료군(그룹) 필터:", options=sorted(list(unique_groups)), default=[]
             )
-            
             search_query = st.sidebar.text_input("개별 염료명 검색 (예: APEX, ECO 등)", "")
             
             filtered_pids = []
@@ -227,7 +212,6 @@ if os.path.exists(ZIP_FILE_PATH):
                 grp = excel_group_map.get(display_name, "미지정")
                 group_match = True if not selected_groups else (grp in selected_groups)
                 name_match = search_query.lower() in display_name.lower()
-                
                 if group_match and name_match:
                     filtered_pids.append(pid)
                     
@@ -239,12 +223,10 @@ if os.path.exists(ZIP_FILE_PATH):
                 for pid in pids:
                     st.session_state.selected_dyes.add(pid)
                     st.session_state[f"chk_{pid}"] = True
-
             def deselect_all_filtered(pids):
                 for pid in pids:
                     st.session_state.selected_dyes.discard(pid)
                     st.session_state[f"chk_{pid}"] = False
-
             def toggle_dye(pid):
                 if st.session_state.get(f"chk_{pid}", False):
                     st.session_state.selected_dyes.add(pid)
@@ -256,128 +238,103 @@ if os.path.exists(ZIP_FILE_PATH):
             col2.button(":material/clear: 결과 전체 해제", on_click=deselect_all_filtered, args=(filtered_pids,))
 
             st.sidebar.markdown("---")
-            
             st.sidebar.write(f":material/arrow_downward: **[{selected_db_name}] 필터링된 염료 목록**")
             for pid in filtered_pids:
                 display_name = dye_mapping[pid]
                 grp = excel_group_map.get(display_name, "미지정")
                 label_text = f"[{grp}] {display_name}"
-                
                 if f"chk_{pid}" not in st.session_state:
                     st.session_state[f"chk_{pid}"] = (pid in st.session_state.selected_dyes)
+                st.sidebar.checkbox(label_text, key=f"chk_{pid}", on_change=toggle_dye, args=(pid,))
 
-                st.sidebar.checkbox(
-                    label_text, 
-                    key=f"chk_{pid}",
-                    on_change=toggle_dye,
-                    args=(pid,)
-                )
-
-            st.success(f":material/check_circle: **{selected_db_name}** 데이터베이스 로드 완료! 전체 {len(dye_mapping)}개의 염료 중 현재 **{len(st.session_state.selected_dyes)}**개를 선택(장바구니에 담음)했습니다.")
-            
+            st.success(f":material/check_circle: **{selected_db_name}** 로드 완료! 현재 **{len(st.session_state.selected_dyes)}**개를 선택했습니다.")
             if st.session_state.selected_dyes:
-                with st.expander(":material/shopping_cart: 장바구니에 담긴 염료 목록 보기 (클릭하여 펼치기)", expanded=True):
-                    sorted_selected = sorted(
-                        list(st.session_state.selected_dyes), 
-                        key=lambda x: (excel_order_map.get(dye_mapping[x], float('inf')), dye_mapping[x])
-                    )
-                    
+                with st.expander(":material/shopping_cart: 장바구니 목록 보기 (클릭하여 펼치기)", expanded=True):
+                    sorted_selected = sorted(list(st.session_state.selected_dyes), key=lambda x: (excel_order_map.get(dye_mapping[x], float('inf')), dye_mapping[x]))
                     for selected_pid in sorted_selected:
                         display_name = dye_mapping[selected_pid]
                         grp = excel_group_map.get(display_name, "미지정")
                         st.write(f"- **[{grp}] {display_name}** <span style='color:gray; font-size:0.8em;'>(내부 XML명: {selected_pid})</span>", unsafe_allow_html=True)
-            
             st.markdown("---")
             
             st.subheader(":material/settings: 데이터컬러 내보내기 설정")
-            new_set_name = st.text_input(
-                "Datacolor에 표시될 완전히 새로운 염료 세트 이름 (기존 DB에 덮어쓰기를 방지합니다):", 
-                value=f"{selected_db_name}_Extract"
-            )
-            
+            new_set_name = st.text_input("Datacolor에 표시될 새로운 세트 이름 (기존 덮어쓰기 방지):", value=f"{selected_db_name}_Extract")
             target_machine = st.radio(
-                "기기 호환성 변환 (거래처 배포 시 범용인 'Datacolor 600'을 권장합니다):",
+                "기기 호환성 변환 (거래처 배포 시 범용인 'Datacolor 600' 권장):",
                 ["Datacolor 600 (범용/거래처 배포용)", "Datacolor 800", "Datacolor 1000", "변환 안 함 (원본 유지)"],
-                index=0, 
-                horizontal=True
+                index=0, horizontal=True
             )
-            
             st.markdown("<br>", unsafe_allow_html=True)
             
             col_btn1, col_btn2 = st.columns(2)
 
             with col_btn1:
-                if st.button(":material/rocket_launch: 선택 항목을 XML 파일로 묶어서 추출하기", use_container_width=True):
+                if st.button(":material/rocket_launch: 선택 항목을 XML 파일로 추출하기", use_container_width=True):
                     if not st.session_state.selected_dyes:
-                        st.warning(":material/warning: 왼쪽 사이드바에서 먼저 하나 이상의 염료를 체크해주세요.")
+                        st.warning(":material/warning: 염료를 먼저 체크해주세요.")
                     else:
-                        with st.spinner("최종 C플랜: 데이터 완벽 정리 및 구형 파서 호환 포맷팅 중..."):
-                            new_root = copy.deepcopy(root)
+                        with st.spinner("가장 안전한 원본 텍스트 절삭 방식으로 추출 중입니다..."):
+                            
+                            # 💡 파이썬 XML파서를 쓰지 않고 "원본 텍스트"를 그대로 불러옵니다.
+                            with zipfile.ZipFile(ZIP_FILE_PATH, 'r') as z:
+                                with z.open(xml_filename) as xml_file:
+                                    xml_text = xml_file.read().decode('ISO-8859-1')
                             
                             kept_pids = st.session_state.selected_dyes.copy()
                             kept_pids.add('H2O')
-
-                            kept_sample_ids = set()
-                            elements_to_remove = []
-
-                            # 1. 유지해야 할 샘플(Sample) ID 추적
-                            for serie in new_root.iter('CalibrationSerie'):
-                                for comp in serie.iter('CalibrationSerieComp'):
-                                    pid_node = comp.find('PRODUCT_ID')
-                                    if pid_node is not None and pid_node.text and pid_node.text.strip() in kept_pids:
-                                        s_id_node = serie.find('SAMPLEID')
-                                        if s_id_node is not None and s_id_node.text:
-                                            kept_sample_ids.add(s_id_node.text.strip())
-
-                            # 2. 불필요한 염료 및 연결고리 찌꺼기 추적
-                            for parent in new_root.iter():
-                                for child in list(parent):
-                                    if child.tag in ['Product', 'Dyestuff', 'Calibration']:
-                                        pid_node = child.find('PRODUCT_ID')
-                                        if pid_node is not None and pid_node.text:
-                                            if pid_node.text.strip() not in kept_pids:
-                                                elements_to_remove.append((parent, child))
-                                                
-                                    elif child.tag == 'CalibrationSerie':
-                                        s_id_node = child.find('SAMPLEID')
-                                        if s_id_node is not None and s_id_node.text:
-                                            if s_id_node.text.strip() not in kept_sample_ids:
-                                                elements_to_remove.append((parent, child))
-                                                
-                                    elif child.tag in ['Sample', 'SubstrateDelivery']:
-                                        s_id_node = child.find('SAMPLEID')
-                                        if s_id_node is not None and s_id_node.text:
-                                            if s_id_node.text.strip() not in kept_sample_ids:
-                                                elements_to_remove.append((parent, child))
-
-                            # 3. 찌꺼기 삭제
-                            for parent, child in elements_to_remove:
-                                if child in parent:
-                                    parent.remove(child)
+                            
+                            # 💡 줄바꿈(\r\n)을 완벽하게 보존하며 한 줄씩 읽어 들입니다.
+                            lines = xml_text.splitlines(keepends=True)
+                            output = []
+                            i = 0
+                            
+                            while i < len(lines):
+                                line = lines[i]
+                                stripped = line.strip()
+                                
+                                is_target = False
+                                tag_name = ""
+                                # 오직 Product, Dyestuff, Calibration 태그만 표적으로 삼아 검사합니다 (원단 Sample은 무사통과)
+                                if stripped.startswith('<Product ') or stripped == '<Product>':
+                                    is_target, tag_name = True, "Product"
+                                elif stripped.startswith('<Dyestuff ') or stripped == '<Dyestuff>':
+                                    is_target, tag_name = True, "Dyestuff"
+                                elif stripped.startswith('<Calibration ') or stripped == '<Calibration>':
+                                    is_target, tag_name = True, "Calibration"
                                     
-                            # 4. 세트 이름 및 기기 모델 변경
+                                if is_target:
+                                    end_tag = f'</{tag_name}>'
+                                    block_lines = [line]
+                                    pid = None
+                                    
+                                    # 블록이 끝날 때까지 모두 담으며 PRODUCT_ID가 있는지 확인합니다.
+                                    i += 1
+                                    while i < len(lines):
+                                        b_line = lines[i]
+                                        block_lines.append(b_line)
+                                        if '<PRODUCT_ID>' in b_line:
+                                            match = re.search(r'<PRODUCT_ID>\s*(.*?)\s*</PRODUCT_ID>', b_line)
+                                            if match:
+                                                pid = match.group(1).strip()
+                                        if end_tag in b_line:
+                                            break
+                                        i += 1
+                                        
+                                    # 선택된 염료면 통과시키고, 아니면 블록 전체를 증발시킵니다!
+                                    if pid is None or pid in kept_pids:
+                                        output.extend(block_lines)
+                                else:
+                                    # 원단(Sample), 헤더 등 그 외 모든 데이터는 100% 원본 그대로 유지됩니다.
+                                    output.append(line)
+                                i += 1
+                                
+                            final_text = "".join(output)
+                            
+                            # 💡 안전한 텍스트 치환 (새 이름 및 기기 모델 덮어쓰기)
                             if new_set_name:
-                                colorant_set_node = None
-                                for elem in new_root.iter('ColorantSet'):
-                                    colorant_set_node = elem
-                                    break
-                                    
-                                if colorant_set_node is not None:
-                                    old_id = ""
-                                    id_node = colorant_set_node.find('COLORANTSET_ID')
-                                    if id_node is not None:
-                                        old_id = id_node.text
-                                        id_node.text = new_set_name
-                                        
-                                    name_node = colorant_set_node.find('COLORANTSET_NAME')
-                                    if name_node is not None:
-                                        name_node.text = new_set_name
-                                        
-                                    if old_id:
-                                        for elem in new_root.iter('COLORANTSET_ID'):
-                                            if elem.text == old_id:
-                                                elem.text = new_set_name
-
+                                final_text = re.sub(r'<COLORANTSET_ID>.*?</COLORANTSET_ID>', f'<COLORANTSET_ID>{new_set_name}</COLORANTSET_ID>', final_text)
+                                final_text = re.sub(r'<COLORANTSET_NAME>.*?</COLORANTSET_NAME>', f'<COLORANTSET_NAME>{new_set_name}</COLORANTSET_NAME>', final_text)
+                                
                             if target_machine != "변환 안 함 (원본 유지)":
                                 if "600" in target_machine:
                                     new_model = "600"
@@ -385,30 +342,9 @@ if os.path.exists(ZIP_FILE_PATH):
                                     new_model = "800"
                                 elif "1000" in target_machine:
                                     new_model = "1000"
-                                    
-                                for inst in new_root.iter('Instrument'):
-                                    model_node = inst.find('MODEL')
-                                    if model_node is not None:
-                                        model_node.text = new_model
-
-                            # 💡 5. [플랜 C] 태그 엉킴(Sybase 에러) 원천 차단을 위한 최종 텍스트 성형
-                            xml_str = ET.tostring(new_root, encoding='ISO-8859-1', xml_declaration=False, short_empty_elements=False).decode('ISO-8859-1')
-                            
-                            # (1) 데이터 사이에 남아있는 불규칙한 공백을 완전히 제거 (초기화)
-                            xml_str = re.sub(r'>\s+<', '><', xml_str)
-                            
-                            # (2) 600 기종이 무조건 읽을 수 있도록 '모든' 태그 사이에 윈도우 엔터키(\r\n) 강제 주입
-                            # 이렇게 하면 <A>와 <B>가 절대 달라붙을 일이 없습니다.
-                            xml_str = xml_str.replace('><', '>\r\n<')
-                            
-                            # (3) <Blob></Blob> 처럼 내용이 비어있는 태그 안에 들어간 엔터키는 다시 빼서 복구
-                            xml_str = re.sub(r'<([a-zA-Z0-9_:-]+)([^>]*)>\r\n</\1>', r'<\1\2></\1>', xml_str)
-                            
-                            # (4) 600 기종이 요구하는 특수 띄어쓰기 복구
-                            xml_str = xml_str.replace('type="table"', 'type = "table"')
-
-                            final_xml = '<?xml version="1.0" encoding="ISO-8859-1" standalone="yes"?>\r\n' + xml_str
-                            xml_buffer = io.BytesIO(final_xml.encode('ISO-8859-1'))
+                                final_text = re.sub(r'<MODEL>.*?</MODEL>', f'<MODEL>{new_model}</MODEL>', final_text)
+                                
+                            xml_buffer = io.BytesIO(final_text.encode('ISO-8859-1'))
 
                         st.download_button(
                             label=f":material/download: {new_set_name}.xml 다운로드",
@@ -426,12 +362,10 @@ if os.path.exists(ZIP_FILE_PATH):
                     else:
                         with st.spinner("개별 QTX 파일을 생성 및 압축 중입니다..."):
                             qtx_files_dict = generate_qtx_files(st.session_state.selected_dyes, root, dye_mapping)
-                            
                             zip_buffer = io.BytesIO()
                             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                                 for filename, content in qtx_files_dict.items():
                                     zf.writestr(filename, content)
-                            
                             zip_buffer.seek(0)
                         
                         st.download_button(
