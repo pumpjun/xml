@@ -6,7 +6,8 @@ import copy
 import os
 import zipfile
 
-st.set_page_config(page_title="염료 데이터 추출기", page_icon="🎨", layout="wide")
+# page_icon은 이모티콘만 지원하므로 제거하여 기본값(깔끔한 탭) 유지
+st.set_page_config(page_title="염료 데이터 추출기", layout="wide")
 
 def clear_selection():
     st.session_state.selected_dyes = set()
@@ -14,8 +15,8 @@ def clear_selection():
 if 'selected_dyes' not in st.session_state:
     st.session_state.selected_dyes = set()
 
-st.title("🎨 단색 염료 데이터 추출기")
-st.write("👈 **왼쪽 사이드바**에서 사용할 DB를 선택하고 염료를 검색하여 추출하세요.")
+st.title(":material/palette: 단색 염료 데이터 추출기")
+st.write(":material/arrow_back: **왼쪽 사이드바**에서 사용할 DB를 선택하고 염료를 검색하여 추출하세요.")
 
 # 1. 깃허브에 업로드할 ZIP 파일 목록
 AVAILABLE_FILES = {
@@ -60,15 +61,14 @@ def load_excel_mapping(db_name):
                     if orig_name not in order_map:
                         order_map[orig_name] = idx
     except Exception as e:
-        st.sidebar.warning(f"⚠️ 엑셀 매핑 파일 읽기 오류: {e}")
+        st.sidebar.warning(f":material/warning: 엑셀 매핑 파일 읽기 오류: {e}")
         
     return mapping, order_map
 
-# 💡 Datacolor QTX 포맷 파일 생성 함수
+# Datacolor QTX 포맷 파일 생성 함수
 def generate_qtx_files(selected_pids, root, dye_mapping):
     qtx_dict = {} 
     
-    # 1. 샘플 데이터(스펙트럼) 스캔
     samples_data = {}
     for sample in root.iter('Sample'):
         s_id_node = sample.find('SAMPLEID')
@@ -82,12 +82,10 @@ def generate_qtx_files(selected_pids, root, dye_mapping):
                 wl = spec.find('WAVELENGTH')
                 val = spec.find('SPECTRUMVALUE')
                 if wl is not None and val is not None:
-                    # XML의 반사율 값(0~1)을 QTX 표준 백분율(0~100)로 변환
                     spectrum_dict[int(wl.text.strip())] = float(val.text.strip()) * 100
             
             samples_data[s_id] = {'name': s_name, 'spectrum': spectrum_dict}
 
-    # 2. 선택된 염료 각각에 대해 별도의 QTX 내용 작성
     for pid in selected_pids:
         qtx_lines = ["[VERSION]", "QTX=QTX 1.0", "", "[DATAMETRIC]", "DATAMETRIC=1", ""]
         
@@ -110,7 +108,6 @@ def generate_qtx_files(selected_pids, root, dye_mapping):
             if not series_list:
                 continue
                 
-            # 측정 파장 범위 및 포인트 개수 자동 계산
             first_sample_spec = series_list[0]['spectrum']
             if not first_sample_spec:
                 continue
@@ -120,7 +117,6 @@ def generate_qtx_files(selected_pids, root, dye_mapping):
             max_wl = max(wls)
             num_pts = ((max_wl - min_wl) // 10) + 1
             
-            # 첫 번째 샘플을 Standard로 지정
             std_sample = series_list[0]
             std_name = std_sample['name']
             
@@ -136,7 +132,6 @@ def generate_qtx_files(selected_pids, root, dye_mapping):
             qtx_lines.append(f"STD_R= {', '.join(std_r_vals)}")
             qtx_lines.append("")
             
-            # 나머지 샘플들을 Batch로 지정
             for i, bat_sample in enumerate(series_list[1:]):
                 qtx_lines.append(f"[BATCH_DATA {i}]")
                 qtx_lines.append(f"STD_NAME={std_name}")
@@ -152,7 +147,6 @@ def generate_qtx_files(selected_pids, root, dye_mapping):
                 qtx_lines.append(f"BAT_R= {', '.join(bat_r_vals)}")
                 qtx_lines.append("")
             
-            # 파일명에 쓸 수 없는 특수문자 제거 후 딕셔너리에 저장
             display_name = dye_mapping.get(pid, pid)
             safe_filename = "".join(c for c in display_name if c not in r'\/:*?"<>|')
             qtx_dict[f"{safe_filename}.qtx"] = "\n".join(qtx_lines)
@@ -162,7 +156,7 @@ def generate_qtx_files(selected_pids, root, dye_mapping):
 # ==========================================
 # ⬅️ 왼쪽 사이드바 영역
 # ==========================================
-st.sidebar.header("📂 데이터베이스 선택")
+st.sidebar.header(":material/folder_open: 데이터베이스 선택")
 selected_db_name = st.sidebar.selectbox(
     "사용할 염료 데이터베이스를 선택하세요:",
     options=list(AVAILABLE_FILES.keys()),
@@ -204,9 +198,9 @@ if os.path.exists(ZIP_FILE_PATH):
                         dye_mapping[pid] = display_name 
 
         if not dye_mapping:
-            st.error("염료를 찾을 수 없습니다. XML 파일 구조를 확인해주세요.")
+            st.error(":material/error: 염료를 찾을 수 없습니다. XML 파일 구조를 확인해주세요.")
         else:
-            st.sidebar.header("🔍 염료 검색 및 선택")
+            st.sidebar.header(":material/search: 염료 검색 및 선택")
             search_query = st.sidebar.text_input("오리지널 염료명 검색 (예: APEX, ECO 등)", "")
             
             filtered_pids = [pid for pid, display_name in dye_mapping.items() if search_query.lower() in display_name.lower()]
@@ -231,12 +225,12 @@ if os.path.exists(ZIP_FILE_PATH):
                     st.session_state.selected_dyes.discard(pid)
 
             col1, col2 = st.sidebar.columns(2)
-            col1.button("✅ 전체 선택", on_click=select_all_filtered, args=(filtered_pids,))
-            col2.button("❌ 전체 해제", on_click=deselect_all_filtered, args=(filtered_pids,))
+            col1.button(":material/done_all: 전체 선택", on_click=select_all_filtered, args=(filtered_pids,))
+            col2.button(":material/clear: 전체 해제", on_click=deselect_all_filtered, args=(filtered_pids,))
 
             st.sidebar.markdown("---")
             
-            st.sidebar.write(f"👇 **[{selected_db_name}] 염료 목록 (엑셀 순서 정렬)**")
+            st.sidebar.write(f":material/arrow_downward: **[{selected_db_name}] 염료 목록 (엑셀 순서 정렬)**")
             for pid in filtered_pids:
                 display_name = dye_mapping[pid]
                 
@@ -251,12 +245,12 @@ if os.path.exists(ZIP_FILE_PATH):
                 )
 
             # ==========================================
-            # ➡️ 메인 화면 영역
+            # ➡️️ 메인 화면 영역
             # ==========================================
-            st.success(f"**{selected_db_name}** 데이터베이스 로드 완료! 전체 {len(dye_mapping)}개의 염료 중 현재 **{len(st.session_state.selected_dyes)}**개를 선택했습니다.")
+            st.success(f":material/check_circle: **{selected_db_name}** 데이터베이스 로드 완료! 전체 {len(dye_mapping)}개의 염료 중 현재 **{len(st.session_state.selected_dyes)}**개를 선택했습니다.")
             
             if st.session_state.selected_dyes:
-                with st.expander("📌 현재 선택된 염료 목록 보기 (클릭하여 펼치기)", expanded=True):
+                with st.expander(":material/push_pin: 현재 선택된 염료 목록 보기 (클릭하여 펼치기)", expanded=True):
                     sorted_selected = sorted(
                         list(st.session_state.selected_dyes), 
                         key=lambda x: (excel_order_map.get(dye_mapping[x], float('inf')), dye_mapping[x])
@@ -271,9 +265,9 @@ if os.path.exists(ZIP_FILE_PATH):
 
             # XML 다운로드 로직
             with col_btn1:
-                if st.button("🚀 XML 파일로 추출하기", use_container_width=True):
+                if st.button(":material/rocket_launch: XML 파일로 추출하기", use_container_width=True):
                     if not st.session_state.selected_dyes:
-                        st.warning("왼쪽 사이드바에서 먼저 하나 이상의 염료를 체크해주세요.")
+                        st.warning(":material/warning: 왼쪽 사이드바에서 먼저 하나 이상의 염료를 체크해주세요.")
                     else:
                         with st.spinner("XML 파일을 생성 중입니다..."):
                             new_root = copy.deepcopy(root)
@@ -299,7 +293,7 @@ if os.path.exists(ZIP_FILE_PATH):
                             xml_buffer.seek(0)
 
                         st.download_button(
-                            label=f"📥 Filtered_{selected_db_name}.xml 다운로드",
+                            label=f":material/download: Filtered_{selected_db_name}.xml 다운로드",
                             data=xml_buffer,
                             file_name=f"Filtered_{selected_db_name}.xml",
                             mime="application/xml",
@@ -309,9 +303,9 @@ if os.path.exists(ZIP_FILE_PATH):
 
             # QTX 다중 파일(ZIP) 다운로드 로직
             with col_btn2:
-                if st.button("📊 QTX 파일로 추출하기", use_container_width=True):
+                if st.button(":material/bar_chart: QTX 파일로 추출하기", use_container_width=True):
                     if not st.session_state.selected_dyes:
-                        st.warning("왼쪽 사이드바에서 먼저 하나 이상의 염료를 체크해주세요.")
+                        st.warning(":material/warning: 왼쪽 사이드바에서 먼저 하나 이상의 염료를 체크해주세요.")
                     else:
                         with st.spinner("개별 QTX 파일을 생성 및 압축 중입니다..."):
                             qtx_files_dict = generate_qtx_files(st.session_state.selected_dyes, root, dye_mapping)
@@ -324,7 +318,7 @@ if os.path.exists(ZIP_FILE_PATH):
                             zip_buffer.seek(0)
                         
                         st.download_button(
-                            label=f"📥 {selected_db_name}_QTX.zip 다운로드",
+                            label=f":material/download: {selected_db_name}_QTX.zip 다운로드",
                             data=zip_buffer,
                             file_name=f"{selected_db_name}_QTX.zip",
                             mime="application/zip",
@@ -333,8 +327,8 @@ if os.path.exists(ZIP_FILE_PATH):
                         )
 
     except zipfile.BadZipFile:
-        st.error("ZIP 파일이 손상되었거나 올바른 압축 파일이 아닙니다.")
+        st.error(":material/error: ZIP 파일이 손상되었거나 올바른 압축 파일이 아닙니다.")
     except Exception as e:
-        st.error(f"데이터베이스를 처리하는 중 오류가 발생했습니다: {e}")
+        st.error(f":material/error: 데이터베이스를 처리하는 중 오류가 발생했습니다: {e}")
 else:
-    st.error(f"⚠️ 서버에서 '{ZIP_FILE_PATH}' 파일을 찾을 수 없습니다. GitHub 저장소에 ZIP 파일이 업로드되었는지 확인해주세요.")
+    st.error(f":material/warning: 서버에서 '{ZIP_FILE_PATH}' 파일을 찾을 수 없습니다. GitHub 저장소에 ZIP 파일이 업로드되었는지 확인해주세요.")
