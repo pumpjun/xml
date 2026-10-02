@@ -5,6 +5,7 @@ import io
 import copy
 import os
 import zipfile
+import re  # 정규표현식 라이브러리 추가
 
 st.set_page_config(page_title="염료 데이터 추출기", layout="wide")
 
@@ -17,12 +18,14 @@ if 'selected_dyes' not in st.session_state:
 st.title(":material/palette: 단색 염료 데이터 추출기")
 st.write(":material/arrow_back: **왼쪽 사이드바**에서 염료군(그룹)을 선택하거나 검색하여 염료를 장바구니에 담으세요.")
 
+# 1. 깃허브에 업로드할 ZIP 파일 목록
 AVAILABLE_FILES = {
         "Disperse Interlock": "Disperse Interlock.zip",
         "Disperse Woven": "Disperse Woven.zip",
         "Reactive": "Reactive.zip"
 }
 
+# 엑셀 매핑 함수
 @st.cache_data
 def load_excel_mapping(db_name):
     mapping = {}
@@ -74,6 +77,7 @@ def load_excel_mapping(db_name):
         
     return mapping, order_map, group_map
 
+# Datacolor QTX 포맷 파일 생성 함수
 def generate_qtx_files(selected_pids, root, dye_mapping):
     qtx_dict = {} 
     
@@ -161,6 +165,9 @@ def generate_qtx_files(selected_pids, root, dye_mapping):
             
     return qtx_dict
 
+# ==========================================
+# ⬅️ 왼쪽 사이드바 영역
+# ==========================================
 st.sidebar.header(":material/folder_open: 데이터베이스 선택")
 selected_db_name = st.sidebar.selectbox(
     "사용할 염료 데이터베이스를 선택하세요:",
@@ -272,6 +279,9 @@ if os.path.exists(ZIP_FILE_PATH):
                     args=(pid,)
                 )
 
+            # ==========================================
+            # ➡ 메인 화면 영역
+            # ==========================================
             st.success(f":material/check_circle: **{selected_db_name}** 데이터베이스 로드 완료! 전체 {len(dye_mapping)}개의 염료 중 현재 **{len(st.session_state.selected_dyes)}**개를 선택(장바구니에 담음)했습니다.")
             
             if st.session_state.selected_dyes:
@@ -312,21 +322,54 @@ if os.path.exists(ZIP_FILE_PATH):
                     else:
                         with st.spinner("XML 파일을 생성 중입니다..."):
                             new_root = copy.deepcopy(root)
+                            
+                            # 1. 유지할 대상 수집 (선택한 염료 + H2O)
+                            kept_pids = st.session_state.selected_dyes.copy()
+                            kept_pids.add('H2O')
+
+                            # 2. 유지해야 할 샘플(Sample) ID 추적 (오아시스 데이터 방지)
+                            kept_sample_ids = set()
                             elements_to_remove = []
 
+                            # 삭제 대상 분류 (CalibrationSerie, Product 등)
                             for parent in new_root.iter():
                                 for child in list(parent):
-                                    if child.tag in ['Product', 'Dyestuff', 'Calibration']:
+                                    if child.tag == 'CalibrationSerie':
+                                        keep_serie = False
+                                        for comp in child.iter('CalibrationSerieComp'):
+                                            pid_node = comp.find('PRODUCT_ID')
+                                            if pid_node is not None and pid_node.text:
+                                                if pid_node.text.strip() in kept_pids:
+                                                    keep_serie = True
+                                        
+                                        if keep_serie:
+                                            s_id_node = child.find('SAMPLEID')
+                                            if s_id_node is not None and s_id_node.text:
+                                                kept_sample_ids.add(s_id_node.text.strip())
+                                        else:
+                                            elements_to_remove.append((parent, child))
+                                            
+                                    elif child.tag in ['Product', 'Dyestuff', 'Calibration']:
                                         pid_node = child.find('PRODUCT_ID')
                                         if pid_node is not None and pid_node.text:
-                                            pid = pid_node.text.strip()
-                                            if pid not in st.session_state.selected_dyes and pid != 'H2O':
+                                            if pid_node.text.strip() not in kept_pids:
                                                 elements_to_remove.append((parent, child))
 
+                            # 3. 찌꺼기 샘플(Sample) 및 연결 데이터 깔끔히 삭제
+                            for parent in new_root.iter():
+                                for child in list(parent):
+                                    if child.tag in ['Sample', 'SubstrateDelivery']:
+                                        s_id_node = child.find('SAMPLEID')
+                                        if s_id_node is not None and s_id_node.text:
+                                            if s_id_node.text.strip() not in kept_sample_ids:
+                                                elements_to_remove.append((parent, child))
+
+                            # 일괄 삭제 진행
                             for parent, child in elements_to_remove:
                                 if child in parent:
                                     parent.remove(child)
                                     
+                            # 새로운 세트 이름 덮어쓰기
                             if new_set_name:
                                 colorant_set_node = None
                                 for elem in new_root.iter('ColorantSet'):
@@ -362,22 +405,20 @@ if os.path.exists(ZIP_FILE_PATH):
                                     if model_node is not None:
                                         model_node.text = new_model
 
-                            # 💡 핵심: 600 모델의 Sybase 엔진 파싱 에러 완벽 해결
-                            # 1. 텍스트로 변환 (short_empty_elements=False 필수)
+                            # 💡 [핵심] Datacolor 600 Sybase 파싱 버그 완벽 해결 정규식
                             xml_str = ET.tostring(new_root, encoding='ISO-8859-1', xml_declaration=False, short_empty_elements=False).decode('ISO-8859-1')
                             
-                            # 2. Datacolor 600은 특정 속성의 띄어쓰기를 깐깐하게 검사함
+                            # 1단계: 기존의 모든 불규칙한 태그 사이 공백을 완벽히 제거
+                            xml_str = re.sub(r'>\s+<', '><', xml_str)
+                            
+                            # 2단계: 모든 태그 사이에 일관된 윈도우 줄바꿈(\r\n) 강제 주입
+                            xml_str = xml_str.replace('><', '>\r\n<')
+                            
+                            # 3단계: 내용이 비어있는 빈 태그(<Blob></Blob> 등) 사이에 들어간 줄바꿈을 다시 원상복구
+                            xml_str = re.sub(r'<([a-zA-Z0-9_]+)([^>]*)>\r\n</\1>', r'<\1\2></\1>', xml_str)
+                            
+                            # 4단계: 600 기종이 좋아하는 type = "table" 띄어쓰기 규격 준수
                             xml_str = xml_str.replace('type="table"', 'type = "table"')
-                            
-                            # 3. 빈 텍스트 노드가 강제 축약되는 것을 막기 위해 명시적으로 빈 태그 구조 복원
-                            xml_str = xml_str.replace('></Blob>', '></Blob>')
-                            xml_str = xml_str.replace('></STABLE>', '></STABLE>')
-                            xml_str = xml_str.replace('></UNIT_ID>', '></UNIT_ID>')
-                            xml_str = xml_str.replace('></PRODUCTSUPPLIER_ID>', '></PRODUCTSUPPLIER_ID>')
-                            
-                            # 4. 윈도우 CRLF 강제 적용 (600 엔진은 \n 단독 사용 시 한 줄로 인식하여 터짐)
-                            xml_lines = xml_str.splitlines()
-                            xml_str = "\r\n".join(xml_lines)
 
                             final_xml = '<?xml version="1.0" encoding="ISO-8859-1" standalone="yes"?>\r\n' + xml_str
                             xml_buffer = io.BytesIO(final_xml.encode('ISO-8859-1'))
