@@ -6,7 +6,6 @@ import copy
 import os
 import zipfile
 
-# page_icon은 이모티콘만 지원하므로 제거하여 기본값 유지
 st.set_page_config(page_title="염료 데이터 추출기", layout="wide")
 
 def clear_selection():
@@ -18,14 +17,12 @@ if 'selected_dyes' not in st.session_state:
 st.title(":material/palette: 단색 염료 데이터 추출기")
 st.write(":material/arrow_back: **왼쪽 사이드바**에서 염료군(그룹)을 선택하거나 검색하여 염료를 장바구니에 담으세요.")
 
-# 1. 깃허브에 업로드할 ZIP 파일 목록
 AVAILABLE_FILES = {
         "Disperse Interlock": "Disperse Interlock.zip",
         "Disperse Woven": "Disperse Woven.zip",
         "Reactive": "Reactive.zip"
 }
 
-# 엑셀 매핑 함수
 @st.cache_data
 def load_excel_mapping(db_name):
     mapping = {}
@@ -77,7 +74,6 @@ def load_excel_mapping(db_name):
         
     return mapping, order_map, group_map
 
-# Datacolor QTX 포맷 파일 생성 함수
 def generate_qtx_files(selected_pids, root, dye_mapping):
     qtx_dict = {} 
     
@@ -161,16 +157,10 @@ def generate_qtx_files(selected_pids, root, dye_mapping):
             
             display_name = dye_mapping.get(pid, pid)
             safe_filename = "".join(c for c in display_name if c not in r'\/:*?"<>|')
-            
-            # QTX 파일 역시 윈도우 CRLF 강제
-            qtx_content = "\r\n".join(qtx_lines)
-            qtx_dict[f"{safe_filename}.qtx"] = qtx_content
+            qtx_dict[f"{safe_filename}.qtx"] = "\r\n".join(qtx_lines)
             
     return qtx_dict
 
-# ==========================================
-# ⬅️ 왼쪽 사이드바 영역
-# ==========================================
 st.sidebar.header(":material/folder_open: 데이터베이스 선택")
 selected_db_name = st.sidebar.selectbox(
     "사용할 염료 데이터베이스를 선택하세요:",
@@ -282,9 +272,6 @@ if os.path.exists(ZIP_FILE_PATH):
                     args=(pid,)
                 )
 
-            # ==========================================
-            # ➡ 메인 화면 영역
-            # ==========================================
             st.success(f":material/check_circle: **{selected_db_name}** 데이터베이스 로드 완료! 전체 {len(dye_mapping)}개의 염료 중 현재 **{len(st.session_state.selected_dyes)}**개를 선택(장바구니에 담음)했습니다.")
             
             if st.session_state.selected_dyes:
@@ -375,18 +362,23 @@ if os.path.exists(ZIP_FILE_PATH):
                                     if model_node is not None:
                                         model_node.text = new_model
 
-                            # 💡 600 모델 호환성 완벽 해결 파트
-                            # 1. ElementTree로 텍스트 변환 (빈 태그 보존)
+                            # 💡 핵심: 600 모델의 Sybase 엔진 파싱 에러 완벽 해결
+                            # 1. 텍스트로 변환 (short_empty_elements=False 필수)
                             xml_str = ET.tostring(new_root, encoding='ISO-8859-1', xml_declaration=False, short_empty_elements=False).decode('ISO-8859-1')
                             
-                            # 2. Datacolor 600이 필수적으로 요구하는 "정확한 띄어쓰기" 강제 보정
+                            # 2. Datacolor 600은 특정 속성의 띄어쓰기를 깐깐하게 검사함
                             xml_str = xml_str.replace('type="table"', 'type = "table"')
                             
-                            # 3. 리눅스(\n) 기반 줄바꿈을 전부 윈도우(\r\n) 기반으로 무조건 덮어쓰기
-                            # (이 과정이 없으면 600에서 파일 전체를 한 줄로 읽어버립니다)
-                            xml_str = xml_str.replace('\r\n', '\n').replace('\n', '\r\n')
+                            # 3. 빈 텍스트 노드가 강제 축약되는 것을 막기 위해 명시적으로 빈 태그 구조 복원
+                            xml_str = xml_str.replace('></Blob>', '></Blob>')
+                            xml_str = xml_str.replace('></STABLE>', '></STABLE>')
+                            xml_str = xml_str.replace('></UNIT_ID>', '></UNIT_ID>')
+                            xml_str = xml_str.replace('></PRODUCTSUPPLIER_ID>', '></PRODUCTSUPPLIER_ID>')
+                            
+                            # 4. 윈도우 CRLF 강제 적용 (600 엔진은 \n 단독 사용 시 한 줄로 인식하여 터짐)
+                            xml_lines = xml_str.splitlines()
+                            xml_str = "\r\n".join(xml_lines)
 
-                            # 4. XML 선언부 결합
                             final_xml = '<?xml version="1.0" encoding="ISO-8859-1" standalone="yes"?>\r\n' + xml_str
                             xml_buffer = io.BytesIO(final_xml.encode('ISO-8859-1'))
 
