@@ -64,9 +64,9 @@ def load_excel_mapping(db_name):
         
     return mapping, order_map
 
-# 💡 개별 QTX 파일 묶음 생성 함수
+# 💡 Datacolor QTX 포맷 파일 생성 함수
 def generate_qtx_files(selected_pids, root, dye_mapping):
-    qtx_dict = {} # { "파일명.qtx" : "파일내용텍스트" }
+    qtx_dict = {} 
     
     # 1. 샘플 데이터(스펙트럼) 스캔
     samples_data = {}
@@ -82,6 +82,7 @@ def generate_qtx_files(selected_pids, root, dye_mapping):
                 wl = spec.find('WAVELENGTH')
                 val = spec.find('SPECTRUMVALUE')
                 if wl is not None and val is not None:
+                    # XML의 반사율 값(0~1)을 QTX 표준 백분율(0~100)로 변환
                     spectrum_dict[int(wl.text.strip())] = float(val.text.strip()) * 100
             
             samples_data[s_id] = {'name': s_name, 'spectrum': spectrum_dict}
@@ -89,32 +90,69 @@ def generate_qtx_files(selected_pids, root, dye_mapping):
     # 2. 선택된 염료 각각에 대해 별도의 QTX 내용 작성
     for pid in selected_pids:
         qtx_lines = ["[VERSION]", "QTX=QTX 1.0", "", "[DATAMETRIC]", "DATAMETRIC=1", ""]
-        has_data = False
         
+        calib_node = None
         for calib in root.iter('Calibration'):
             pid_node = calib.find('PRODUCT_ID')
             if pid_node is not None and pid_node.text.strip() == pid:
-                for serie in calib.iter('CalibrationSerie'):
-                    sample_id_node = serie.find('SAMPLEID')
-                    if sample_id_node is not None:
-                        s_id = sample_id_node.text.strip()
-                        if s_id in samples_data:
-                            has_data = True
-                            s_data = samples_data[s_id]
-                            
-                            qtx_lines.append("[STD]")
-                            qtx_lines.append(f'NAME="{s_data["name"]}"')
-                            
-                            r_vals = []
-                            for wl in range(400, 710, 10):
-                                r_vals.append(f"{s_data['spectrum'].get(wl, 0.0):.4f}")
-                            
-                            r_str = " ".join(r_vals)
-                            qtx_lines.append(f"R=400 10 700 {r_str}")
-                            qtx_lines.append("")
-        
-        if has_data:
-            # 파일명에 쓸 수 없는 특수문자 제거
+                calib_node = calib
+                break
+                
+        if calib_node is not None:
+            series_list = []
+            for serie in calib_node.iter('CalibrationSerie'):
+                sample_id_node = serie.find('SAMPLEID')
+                if sample_id_node is not None:
+                    s_id = sample_id_node.text.strip()
+                    if s_id in samples_data:
+                        series_list.append(samples_data[s_id])
+            
+            if not series_list:
+                continue
+                
+            # 측정 파장 범위 및 포인트 개수 자동 계산
+            first_sample_spec = series_list[0]['spectrum']
+            if not first_sample_spec:
+                continue
+                
+            wls = sorted(first_sample_spec.keys())
+            min_wl = min(wls)
+            max_wl = max(wls)
+            num_pts = ((max_wl - min_wl) // 10) + 1
+            
+            # 첫 번째 샘플을 Standard로 지정
+            std_sample = series_list[0]
+            std_name = std_sample['name']
+            
+            qtx_lines.append("[STANDARD_DATA 0]")
+            qtx_lines.append(f"STD_NAME={std_name}")
+            qtx_lines.append("STD_DATETIME=0")
+            qtx_lines.append(f"STD_REFLPOINTS={num_pts}")
+            qtx_lines.append("STD_REFLINTERVAL=10")
+            qtx_lines.append(f"STD_REFLLOW={min_wl}")
+            qtx_lines.append("STD_VIEWING=SCI")
+            
+            std_r_vals = [f"{std_sample['spectrum'].get(wl, 0.0):.6f}" for wl in range(min_wl, max_wl + 10, 10)]
+            qtx_lines.append(f"STD_R= {', '.join(std_r_vals)}")
+            qtx_lines.append("")
+            
+            # 나머지 샘플들을 Batch로 지정
+            for i, bat_sample in enumerate(series_list[1:]):
+                qtx_lines.append(f"[BATCH_DATA {i}]")
+                qtx_lines.append(f"STD_NAME={std_name}")
+                qtx_lines.append(f"BAT_NAME={bat_sample['name']}")
+                qtx_lines.append("BAT_DATETIME=0")
+                qtx_lines.append("BAT_PF_JUDGE=1")
+                qtx_lines.append(f"BAT_REFLPOINTS={num_pts}")
+                qtx_lines.append("BAT_REFLINTERVAL=10")
+                qtx_lines.append(f"BAT_REFLLOW={min_wl}")
+                qtx_lines.append("BAT_VIEWING=SCI")
+                
+                bat_r_vals = [f"{bat_sample['spectrum'].get(wl, 0.0):.6f}" for wl in range(min_wl, max_wl + 10, 10)]
+                qtx_lines.append(f"BAT_R= {', '.join(bat_r_vals)}")
+                qtx_lines.append("")
+            
+            # 파일명에 쓸 수 없는 특수문자 제거 후 딕셔너리에 저장
             display_name = dye_mapping.get(pid, pid)
             safe_filename = "".join(c for c in display_name if c not in r'\/:*?"<>|')
             qtx_dict[f"{safe_filename}.qtx"] = "\n".join(qtx_lines)
@@ -276,10 +314,8 @@ if os.path.exists(ZIP_FILE_PATH):
                         st.warning("왼쪽 사이드바에서 먼저 하나 이상의 염료를 체크해주세요.")
                     else:
                         with st.spinner("개별 QTX 파일을 생성 및 압축 중입니다..."):
-                            # 개별 QTX 파일 딕셔너리 생성
                             qtx_files_dict = generate_qtx_files(st.session_state.selected_dyes, root, dye_mapping)
                             
-                            # 메모리 상에 ZIP 파일 생성
                             zip_buffer = io.BytesIO()
                             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                                 for filename, content in qtx_files_dict.items():
