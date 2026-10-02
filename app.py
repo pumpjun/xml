@@ -2,10 +2,9 @@ import streamlit as st
 import xml.etree.ElementTree as ET
 import pandas as pd
 import io
-import copy
 import os
 import zipfile
-import re  # 정규표현식 라이브러리 추가
+import re  # 순수 텍스트 자르기를 위한 모듈
 
 st.set_page_config(page_title="염료 데이터 추출기", layout="wide")
 
@@ -185,6 +184,7 @@ if os.path.exists(ZIP_FILE_PATH):
         with zipfile.ZipFile(ZIP_FILE_PATH, 'r') as z:
             xml_filename = z.namelist()[0]
             with z.open(xml_filename) as xml_file:
+                # 데이터 표시용 파싱 (추출용으로는 쓰지 않음)
                 tree = ET.parse(xml_file)
                 root = tree.getroot()
 
@@ -320,78 +320,41 @@ if os.path.exists(ZIP_FILE_PATH):
                     if not st.session_state.selected_dyes:
                         st.warning(":material/warning: 왼쪽 사이드바에서 먼저 하나 이상의 염료를 체크해주세요.")
                     else:
-                        with st.spinner("XML 파일을 생성 중입니다..."):
-                            new_root = copy.deepcopy(root)
+                        with st.spinner("XML 원본 텍스트를 파쇄 후 재조립 중입니다..."):
                             
-                            # 1. 유지할 대상 수집 (선택한 염료 + H2O)
+                            # 💡 1. ZIP 안에서 XML을 파이썬 객체가 아닌 "순수 텍스트"로 가져옵니다.
+                            with zipfile.ZipFile(ZIP_FILE_PATH, 'r') as z:
+                                xml_filename = z.namelist()[0]
+                                with z.open(xml_filename) as xml_file:
+                                    xml_text = xml_file.read().decode('ISO-8859-1')
+                            
                             kept_pids = st.session_state.selected_dyes.copy()
                             kept_pids.add('H2O')
 
-                            # 2. 유지해야 할 샘플(Sample) ID 추적 (오아시스 데이터 방지)
-                            kept_sample_ids = set()
-                            elements_to_remove = []
-
-                            # 삭제 대상 분류 (CalibrationSerie, Product 등)
-                            for parent in new_root.iter():
-                                for child in list(parent):
-                                    if child.tag == 'CalibrationSerie':
-                                        keep_serie = False
-                                        for comp in child.iter('CalibrationSerieComp'):
-                                            pid_node = comp.find('PRODUCT_ID')
-                                            if pid_node is not None and pid_node.text:
-                                                if pid_node.text.strip() in kept_pids:
-                                                    keep_serie = True
-                                        
-                                        if keep_serie:
-                                            s_id_node = child.find('SAMPLEID')
-                                            if s_id_node is not None and s_id_node.text:
-                                                kept_sample_ids.add(s_id_node.text.strip())
+                            # 💡 2. 파이썬 파서를 안 쓰고 정규식으로 메모장처럼 텍스트 블록만 잘라냅니다!
+                            # 원본의 띄어쓰기, 줄바꿈, 빈 태그(<Blob></Blob>) 등 모든 것이 완벽하게 유지됩니다.
+                            for tag in ['Product', 'Dyestuff', 'Calibration']:
+                                pattern = f'<{tag}[\\s>].*?</{tag}>'
+                                def repl(match):
+                                    block = match.group(0)
+                                    # 해당 블록 안에 우리가 보존해야 할 PRODUCT_ID가 있는지 확인
+                                    pid_match = re.search(r'<PRODUCT_ID>\s*(.*?)\s*</PRODUCT_ID>', block)
+                                    if pid_match:
+                                        pid = pid_match.group(1).strip()
+                                        if pid in kept_pids:
+                                            return block  # 유지
                                         else:
-                                            elements_to_remove.append((parent, child))
-                                            
-                                    elif child.tag in ['Product', 'Dyestuff', 'Calibration']:
-                                        pid_node = child.find('PRODUCT_ID')
-                                        if pid_node is not None and pid_node.text:
-                                            if pid_node.text.strip() not in kept_pids:
-                                                elements_to_remove.append((parent, child))
-
-                            # 3. 찌꺼기 샘플(Sample) 및 연결 데이터 깔끔히 삭제
-                            for parent in new_root.iter():
-                                for child in list(parent):
-                                    if child.tag in ['Sample', 'SubstrateDelivery']:
-                                        s_id_node = child.find('SAMPLEID')
-                                        if s_id_node is not None and s_id_node.text:
-                                            if s_id_node.text.strip() not in kept_sample_ids:
-                                                elements_to_remove.append((parent, child))
-
-                            # 일괄 삭제 진행
-                            for parent, child in elements_to_remove:
-                                if child in parent:
-                                    parent.remove(child)
-                                    
-                            # 새로운 세트 이름 덮어쓰기
+                                            return ''     # 가차없이 텍스트 삭제
+                                    return block
+                                
+                                xml_text = re.sub(pattern, repl, xml_text, flags=re.DOTALL)
+                                
+                            # 3. 새로운 세트 이름 덮어쓰기 (덮어쓰기 에러 방지)
                             if new_set_name:
-                                colorant_set_node = None
-                                for elem in new_root.iter('ColorantSet'):
-                                    colorant_set_node = elem
-                                    break
-                                    
-                                if colorant_set_node is not None:
-                                    old_id = ""
-                                    id_node = colorant_set_node.find('COLORANTSET_ID')
-                                    if id_node is not None:
-                                        old_id = id_node.text
-                                        id_node.text = new_set_name
-                                        
-                                    name_node = colorant_set_node.find('COLORANTSET_NAME')
-                                    if name_node is not None:
-                                        name_node.text = new_set_name
-                                        
-                                    if old_id:
-                                        for elem in new_root.iter('COLORANTSET_ID'):
-                                            if elem.text == old_id:
-                                                elem.text = new_set_name
+                                xml_text = re.sub(r'<COLORANTSET_ID>.*?</COLORANTSET_ID>', f'<COLORANTSET_ID>{new_set_name}</COLORANTSET_ID>', xml_text)
+                                xml_text = re.sub(r'<COLORANTSET_NAME>.*?</COLORANTSET_NAME>', f'<COLORANTSET_NAME>{new_set_name}</COLORANTSET_NAME>', xml_text)
 
+                            # 4. 기기 호환성(MODEL) 강제 변환
                             if target_machine != "변환 안 함 (원본 유지)":
                                 if "600" in target_machine:
                                     new_model = "600"
@@ -399,29 +362,10 @@ if os.path.exists(ZIP_FILE_PATH):
                                     new_model = "800"
                                 elif "1000" in target_machine:
                                     new_model = "1000"
-                                    
-                                for inst in new_root.iter('Instrument'):
-                                    model_node = inst.find('MODEL')
-                                    if model_node is not None:
-                                        model_node.text = new_model
+                                xml_text = re.sub(r'<MODEL>.*?</MODEL>', f'<MODEL>{new_model}</MODEL>', xml_text)
 
-                            # 💡 [핵심] Datacolor 600 Sybase 파싱 버그 완벽 해결 정규식
-                            xml_str = ET.tostring(new_root, encoding='ISO-8859-1', xml_declaration=False, short_empty_elements=False).decode('ISO-8859-1')
-                            
-                            # 1단계: 기존의 모든 불규칙한 태그 사이 공백을 완벽히 제거
-                            xml_str = re.sub(r'>\s+<', '><', xml_str)
-                            
-                            # 2단계: 모든 태그 사이에 일관된 윈도우 줄바꿈(\r\n) 강제 주입
-                            xml_str = xml_str.replace('><', '>\r\n<')
-                            
-                            # 3단계: 내용이 비어있는 빈 태그(<Blob></Blob> 등) 사이에 들어간 줄바꿈을 다시 원상복구
-                            xml_str = re.sub(r'<([a-zA-Z0-9_]+)([^>]*)>\r\n</\1>', r'<\1\2></\1>', xml_str)
-                            
-                            # 4단계: 600 기종이 좋아하는 type = "table" 띄어쓰기 규격 준수
-                            xml_str = xml_str.replace('type="table"', 'type = "table"')
-
-                            final_xml = '<?xml version="1.0" encoding="ISO-8859-1" standalone="yes"?>\r\n' + xml_str
-                            xml_buffer = io.BytesIO(final_xml.encode('ISO-8859-1'))
+                            # 순수 텍스트를 그대로 파일로 내보냄
+                            xml_buffer = io.BytesIO(xml_text.encode('ISO-8859-1'))
 
                         st.download_button(
                             label=f":material/download: {new_set_name}.xml 다운로드",
