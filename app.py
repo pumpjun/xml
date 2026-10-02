@@ -28,7 +28,7 @@ AVAILABLE_FILES = {
 @st.cache_data
 def load_excel_mapping(db_name):
     mapping = {}
-    order_map = {} # 엑셀 행 순서를 기억할 딕셔너리 추가
+    order_map = {} 
     try:
         if db_name == "Reactive" and os.path.exists("dye_list.xlsx"):
             df = pd.read_excel("dye_list.xlsx", header=None)
@@ -38,7 +38,7 @@ def load_excel_mapping(db_name):
                     orig_name = str(row[2]).strip()
                     mapping[xml_name] = orig_name
                     if orig_name not in order_map:
-                        order_map[orig_name] = idx # 행 번호(idx)를 순서 값으로 저장
+                        order_map[orig_name] = idx
 
         elif db_name == "Disperse Interlock" and os.path.exists("dis_dye_list.xlsx"):
             df = pd.read_excel("dis_dye_list.xlsx", header=None)
@@ -64,6 +64,63 @@ def load_excel_mapping(db_name):
         
     return mapping, order_map
 
+# 💡 개별 QTX 파일 묶음 생성 함수
+def generate_qtx_files(selected_pids, root, dye_mapping):
+    qtx_dict = {} # { "파일명.qtx" : "파일내용텍스트" }
+    
+    # 1. 샘플 데이터(스펙트럼) 스캔
+    samples_data = {}
+    for sample in root.iter('Sample'):
+        s_id_node = sample.find('SAMPLEID')
+        s_name_node = sample.find('NAME')
+        if s_id_node is not None and s_name_node is not None:
+            s_id = s_id_node.text.strip()
+            s_name = s_name_node.text.strip()
+            
+            spectrum_dict = {}
+            for spec in sample.iter('Spectrum'):
+                wl = spec.find('WAVELENGTH')
+                val = spec.find('SPECTRUMVALUE')
+                if wl is not None and val is not None:
+                    spectrum_dict[int(wl.text.strip())] = float(val.text.strip()) * 100
+            
+            samples_data[s_id] = {'name': s_name, 'spectrum': spectrum_dict}
+
+    # 2. 선택된 염료 각각에 대해 별도의 QTX 내용 작성
+    for pid in selected_pids:
+        qtx_lines = ["[VERSION]", "QTX=QTX 1.0", "", "[DATAMETRIC]", "DATAMETRIC=1", ""]
+        has_data = False
+        
+        for calib in root.iter('Calibration'):
+            pid_node = calib.find('PRODUCT_ID')
+            if pid_node is not None and pid_node.text.strip() == pid:
+                for serie in calib.iter('CalibrationSerie'):
+                    sample_id_node = serie.find('SAMPLEID')
+                    if sample_id_node is not None:
+                        s_id = sample_id_node.text.strip()
+                        if s_id in samples_data:
+                            has_data = True
+                            s_data = samples_data[s_id]
+                            
+                            qtx_lines.append("[STD]")
+                            qtx_lines.append(f'NAME="{s_data["name"]}"')
+                            
+                            r_vals = []
+                            for wl in range(400, 710, 10):
+                                r_vals.append(f"{s_data['spectrum'].get(wl, 0.0):.4f}")
+                            
+                            r_str = " ".join(r_vals)
+                            qtx_lines.append(f"R=400 10 700 {r_str}")
+                            qtx_lines.append("")
+        
+        if has_data:
+            # 파일명에 쓸 수 없는 특수문자 제거
+            display_name = dye_mapping.get(pid, pid)
+            safe_filename = "".join(c for c in display_name if c not in r'\/:*?"<>|')
+            qtx_dict[f"{safe_filename}.qtx"] = "\n".join(qtx_lines)
+            
+    return qtx_dict
+
 # ==========================================
 # ⬅️ 왼쪽 사이드바 영역
 # ==========================================
@@ -79,17 +136,14 @@ st.sidebar.markdown("---")
 
 if os.path.exists(ZIP_FILE_PATH):
     try:
-        # 엑셀 매핑 데이터와 '순서 데이터(order_map)'를 함께 불러옴
         excel_name_map, excel_order_map = load_excel_mapping(selected_db_name)
 
-        # 2. ZIP 파일 읽기 및 압축 해제
         with zipfile.ZipFile(ZIP_FILE_PATH, 'r') as z:
             xml_filename = z.namelist()[0]
             with z.open(xml_filename) as xml_file:
                 tree = ET.parse(xml_file)
                 root = tree.getroot()
 
-        # 3. 염료 매핑 딕셔너리 생성 (PRODUCT_ID -> 표시할 오리지널 이름)
         dye_mapping = {}
         
         for elem in root.iter('Product'):
@@ -102,7 +156,6 @@ if os.path.exists(ZIP_FILE_PATH):
                     display_name = excel_name_map.get(pname, excel_name_map.get(pid, pname))
                     dye_mapping[pid] = display_name
 
-        # Product 태그에는 없지만 다른 곳에 있는 염료 스캔
         for elem in root.iter():
             if elem.tag in ['Product', 'Dyestuff', 'Calibration']:
                 pid_node = elem.find('PRODUCT_ID')
@@ -118,21 +171,30 @@ if os.path.exists(ZIP_FILE_PATH):
             st.sidebar.header("🔍 염료 검색 및 선택")
             search_query = st.sidebar.text_input("오리지널 염료명 검색 (예: APEX, ECO 등)", "")
             
-            # 검색어로 1차 필터링
             filtered_pids = [pid for pid, display_name in dye_mapping.items() if search_query.lower() in display_name.lower()]
-            
-            # 💡 핵심 로직: 엑셀 행 순서(excel_order_map)에 맞게 정렬 (엑셀에 없는 항목은 맨 뒤로 배치)
             filtered_pids.sort(key=lambda pid: (excel_order_map.get(dye_mapping[pid], float('inf')), dye_mapping[pid]))
             
             st.sidebar.markdown(f"**검색 결과: {len(filtered_pids)}개**")
 
-            col1, col2 = st.sidebar.columns(2)
-            if col1.button("✅ 전체 선택"):
-                for pid in filtered_pids:
+            def select_all_filtered(pids):
+                for pid in pids:
                     st.session_state.selected_dyes.add(pid)
-            if col2.button("❌ 전체 해제"):
-                for pid in filtered_pids:
+                    st.session_state[f"chk_{pid}"] = True
+
+            def deselect_all_filtered(pids):
+                for pid in pids:
                     st.session_state.selected_dyes.discard(pid)
+                    st.session_state[f"chk_{pid}"] = False
+
+            def toggle_dye(pid):
+                if st.session_state.get(f"chk_{pid}", False):
+                    st.session_state.selected_dyes.add(pid)
+                else:
+                    st.session_state.selected_dyes.discard(pid)
+
+            col1, col2 = st.sidebar.columns(2)
+            col1.button("✅ 전체 선택", on_click=select_all_filtered, args=(filtered_pids,))
+            col2.button("❌ 전체 해제", on_click=deselect_all_filtered, args=(filtered_pids,))
 
             st.sidebar.markdown("---")
             
@@ -140,16 +202,15 @@ if os.path.exists(ZIP_FILE_PATH):
             for pid in filtered_pids:
                 display_name = dye_mapping[pid]
                 
-                is_checked = st.sidebar.checkbox(
+                if f"chk_{pid}" not in st.session_state:
+                    st.session_state[f"chk_{pid}"] = (pid in st.session_state.selected_dyes)
+
+                st.sidebar.checkbox(
                     display_name, 
-                    value=(pid in st.session_state.selected_dyes), 
-                    key=f"chk_{pid}"
+                    key=f"chk_{pid}",
+                    on_change=toggle_dye,
+                    args=(pid,)
                 )
-                
-                if is_checked:
-                    st.session_state.selected_dyes.add(pid)
-                else:
-                    st.session_state.selected_dyes.discard(pid)
 
             # ==========================================
             # ➡️ 메인 화면 영역
@@ -158,7 +219,6 @@ if os.path.exists(ZIP_FILE_PATH):
             
             if st.session_state.selected_dyes:
                 with st.expander("📌 현재 선택된 염료 목록 보기 (클릭하여 펼치기)", expanded=True):
-                    # 💡 메인 화면의 선택된 리스트도 엑셀 순서에 맞게 정렬하여 표시
                     sorted_selected = sorted(
                         list(st.session_state.selected_dyes), 
                         key=lambda x: (excel_order_map.get(dye_mapping[x], float('inf')), dye_mapping[x])
@@ -168,43 +228,73 @@ if os.path.exists(ZIP_FILE_PATH):
                         st.write(f"- **{dye_mapping[selected_pid]}** <span style='color:gray; font-size:0.8em;'>(내부 XML명: {selected_pid})</span>", unsafe_allow_html=True)
             
             st.markdown("---")
+            
+            col_btn1, col_btn2 = st.columns(2)
 
-            if st.button("🚀 선택한 염료로 XML 추출하기", use_container_width=True):
-                if not st.session_state.selected_dyes:
-                    st.warning("왼쪽 사이드바에서 먼저 하나 이상의 염료를 체크해주세요.")
-                else:
-                    with st.spinner("XML 파일을 생성 중입니다..."):
-                        new_root = copy.deepcopy(root)
-                        elements_to_remove = []
+            # XML 다운로드 로직
+            with col_btn1:
+                if st.button("🚀 XML 파일로 추출하기", use_container_width=True):
+                    if not st.session_state.selected_dyes:
+                        st.warning("왼쪽 사이드바에서 먼저 하나 이상의 염료를 체크해주세요.")
+                    else:
+                        with st.spinner("XML 파일을 생성 중입니다..."):
+                            new_root = copy.deepcopy(root)
+                            elements_to_remove = []
 
-                        for parent in new_root.iter():
-                            for child in list(parent):
-                                if child.tag in ['Product', 'Dyestuff', 'Calibration']:
-                                    pid_node = child.find('PRODUCT_ID')
-                                    if pid_node is not None and pid_node.text:
-                                        pid = pid_node.text.strip()
-                                        
-                                        if pid not in st.session_state.selected_dyes and pid != 'H2O':
-                                            elements_to_remove.append((parent, child))
+                            for parent in new_root.iter():
+                                for child in list(parent):
+                                    if child.tag in ['Product', 'Dyestuff', 'Calibration']:
+                                        pid_node = child.find('PRODUCT_ID')
+                                        if pid_node is not None and pid_node.text:
+                                            pid = pid_node.text.strip()
+                                            
+                                            if pid not in st.session_state.selected_dyes and pid != 'H2O':
+                                                elements_to_remove.append((parent, child))
 
-                        for parent, child in elements_to_remove:
-                            if child in parent:
-                                parent.remove(child)
+                            for parent, child in elements_to_remove:
+                                if child in parent:
+                                    parent.remove(child)
 
-                        new_tree = ET.ElementTree(new_root)
-                        xml_buffer = io.BytesIO()
-                        new_tree.write(xml_buffer, encoding='ISO-8859-1', xml_declaration=True)
-                        xml_buffer.seek(0)
+                            new_tree = ET.ElementTree(new_root)
+                            xml_buffer = io.BytesIO()
+                            new_tree.write(xml_buffer, encoding='ISO-8859-1', xml_declaration=True)
+                            xml_buffer.seek(0)
 
-                    export_filename = f"Filtered_{selected_db_name}.xml"
+                        st.download_button(
+                            label=f"📥 Filtered_{selected_db_name}.xml 다운로드",
+                            data=xml_buffer,
+                            file_name=f"Filtered_{selected_db_name}.xml",
+                            mime="application/xml",
+                            type="primary",
+                            use_container_width=True
+                        )
 
-                    st.download_button(
-                        label=f"📥 {export_filename} 다운로드",
-                        data=xml_buffer,
-                        file_name=export_filename,
-                        mime="application/xml",
-                        type="primary"
-                    )
+            # QTX 다중 파일(ZIP) 다운로드 로직
+            with col_btn2:
+                if st.button("📊 QTX 파일로 추출하기", use_container_width=True):
+                    if not st.session_state.selected_dyes:
+                        st.warning("왼쪽 사이드바에서 먼저 하나 이상의 염료를 체크해주세요.")
+                    else:
+                        with st.spinner("개별 QTX 파일을 생성 및 압축 중입니다..."):
+                            # 개별 QTX 파일 딕셔너리 생성
+                            qtx_files_dict = generate_qtx_files(st.session_state.selected_dyes, root, dye_mapping)
+                            
+                            # 메모리 상에 ZIP 파일 생성
+                            zip_buffer = io.BytesIO()
+                            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                                for filename, content in qtx_files_dict.items():
+                                    zf.writestr(filename, content)
+                            
+                            zip_buffer.seek(0)
+                        
+                        st.download_button(
+                            label=f"📥 {selected_db_name}_QTX.zip 다운로드",
+                            data=zip_buffer,
+                            file_name=f"{selected_db_name}_QTX.zip",
+                            mime="application/zip",
+                            type="primary",
+                            use_container_width=True
+                        )
 
     except zipfile.BadZipFile:
         st.error("ZIP 파일이 손상되었거나 올바른 압축 파일이 아닙니다.")
