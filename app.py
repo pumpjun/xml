@@ -1,9 +1,10 @@
 import streamlit as st
 import xml.etree.ElementTree as ET
+import pandas as pd
 import io
 import copy
 import os
-import zipfile  # 압축 해제를 위한 파이썬 기본 라이브러리 추가
+import zipfile
 
 st.set_page_config(page_title="염료 데이터 추출기", page_icon="🎨", layout="wide")
 
@@ -16,12 +17,40 @@ if 'selected_dyes' not in st.session_state:
 st.title("🎨 단색 염료 데이터 추출기")
 st.write("👈 **왼쪽 사이드바**에서 사용할 DB를 선택하고 염료를 검색하여 추출하세요.")
 
-# 1. 깃허브에 업로드할 ZIP 파일 목록으로 변경
+# 1. 깃허브에 업로드할 ZIP 파일 목록
 AVAILABLE_FILES = {
         "Disperse Interlock": "Disperse Interlock.zip",
         "Disperse Woven": "Disperse Woven.zip",
         "Reactive": "Reactive.zip"
 }
+
+# 엑셀 매핑 함수 정의
+@st.cache_data
+def load_excel_mapping(db_name):
+    mapping = {}
+    try:
+        if db_name == "Reactive":
+            if os.path.exists("dye_list.xlsx"):
+                # header=None을 사용하여 A열=0, B열=1, C열=2 로 접근
+                df = pd.read_excel("dye_list.xlsx", header=None)
+                for _, row in df.iterrows():
+                    if len(row) > 2 and pd.notna(row[1]) and pd.notna(row[2]):
+                        mapping[str(row[1]).strip()] = str(row[2]).strip()
+        elif db_name == "Disperse Interlock":
+            if os.path.exists("dis_dye_list.xlsx"):
+                df = pd.read_excel("dis_dye_list.xlsx", header=None)
+                for _, row in df.iterrows():
+                    if len(row) > 3 and pd.notna(row[1]) and pd.notna(row[3]):
+                        mapping[str(row[1]).strip()] = str(row[3]).strip()
+        elif db_name == "Disperse Woven":
+            if os.path.exists("dis_dye_list.xlsx"):
+                df = pd.read_excel("dis_dye_list.xlsx", header=None)
+                for _, row in df.iterrows():
+                    if len(row) > 3 and pd.notna(row[2]) and pd.notna(row[3]):
+                        mapping[str(row[2]).strip()] = str(row[3]).strip()
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ 엑셀 매핑 파일 읽기 오류: {e}")
+    return mapping
 
 # ==========================================
 # ⬅️ 왼쪽 사이드바 영역
@@ -38,17 +67,17 @@ st.sidebar.markdown("---")
 
 if os.path.exists(ZIP_FILE_PATH):
     try:
+        # 엑셀 매핑 데이터 불러오기
+        excel_name_map = load_excel_mapping(selected_db_name)
+
         # 2. ZIP 파일 읽기 및 압축 해제 (메모리 상에서 처리)
         with zipfile.ZipFile(ZIP_FILE_PATH, 'r') as z:
-            # ZIP 파일 안에 있는 첫 번째 파일(XML)의 이름을 가져옵니다.
             xml_filename = z.namelist()[0]
-            
-            # 해당 XML 파일을 열어서 파싱합니다.
             with z.open(xml_filename) as xml_file:
                 tree = ET.parse(xml_file)
                 root = tree.getroot()
 
-        # 3. 염료 매핑 딕셔너리 생성 (PRODUCT_ID -> PRODUCT_NAME)
+        # 3. 염료 매핑 딕셔너리 생성 (PRODUCT_ID -> 표시할 오리지널 이름)
         dye_mapping = {}
         
         for elem in root.iter('Product'):
@@ -58,24 +87,29 @@ if os.path.exists(ZIP_FILE_PATH):
                 pid = pid_node.text.strip()
                 pname = pname_node.text.strip() if pname_node is not None and pname_node.text else pid
                 if pid != 'H2O':
-                    dye_mapping[pid] = pname
+                    # 엑셀에 pname(XML 염료명)이 있으면 오리지널 이름 사용, 없으면 pid로 한 번 더 검색, 둘 다 없으면 pname 유지
+                    display_name = excel_name_map.get(pname, excel_name_map.get(pid, pname))
+                    dye_mapping[pid] = display_name
 
+        # Product 태그에는 없지만 다른 태그에 숨어있는 염료 스캔
         for elem in root.iter():
             if elem.tag in ['Product', 'Dyestuff', 'Calibration']:
                 pid_node = elem.find('PRODUCT_ID')
                 if pid_node is not None and pid_node.text:
                     pid = pid_node.text.strip()
                     if pid != 'H2O' and pid not in dye_mapping:
-                        dye_mapping[pid] = pid 
+                        display_name = excel_name_map.get(pid, pid)
+                        dye_mapping[pid] = display_name 
 
         if not dye_mapping:
             st.error("염료를 찾을 수 없습니다. XML 파일 구조를 확인해주세요.")
         else:
             st.sidebar.header("🔍 염료 검색 및 선택")
             
-            search_query = st.sidebar.text_input("Full Name 검색어 입력 (예: APEX, ECO 등)", "")
+            search_query = st.sidebar.text_input("오리지널 염료명 검색 (예: APEX, ECO 등)", "")
             
-            filtered_pids = [pid for pid, pname in dye_mapping.items() if search_query.lower() in pname.lower()]
+            # 검색어가 '매핑된 오리지널 염료명'에 포함된 경우 필터링
+            filtered_pids = [pid for pid, display_name in dye_mapping.items() if search_query.lower() in display_name.lower()]
             
             st.sidebar.markdown(f"**검색 결과: {len(filtered_pids)}개**")
 
@@ -91,10 +125,10 @@ if os.path.exists(ZIP_FILE_PATH):
             
             st.sidebar.write(f"👇 **[{selected_db_name}] 염료 목록**")
             for pid in filtered_pids:
-                pname = dye_mapping[pid]
+                display_name = dye_mapping[pid]
                 
                 is_checked = st.sidebar.checkbox(
-                    pname, 
+                    display_name, 
                     value=(pid in st.session_state.selected_dyes), 
                     key=f"chk_{pid}"
                 )
@@ -113,7 +147,7 @@ if os.path.exists(ZIP_FILE_PATH):
                 with st.expander("📌 현재 선택된 염료 목록 보기 (클릭하여 펼치기)", expanded=True):
                     sorted_selected = sorted(list(st.session_state.selected_dyes), key=lambda x: dye_mapping[x])
                     for selected_pid in sorted_selected:
-                        st.write(f"- **{dye_mapping[selected_pid]}** <span style='color:gray; font-size:0.8em;'>(내부 ID: {selected_pid})</span>", unsafe_allow_html=True)
+                        st.write(f"- **{dye_mapping[selected_pid]}** <span style='color:gray; font-size:0.8em;'>(내부 XML명: {selected_pid})</span>", unsafe_allow_html=True)
             
             st.markdown("---")
 
@@ -159,4 +193,4 @@ if os.path.exists(ZIP_FILE_PATH):
     except Exception as e:
         st.error(f"데이터베이스를 처리하는 중 오류가 발생했습니다: {e}")
 else:
-    st.error(f"⚠️ 서버에서 '{ZIP_FILE_PATH}' 파일을 찾을 수 없습니다. GitHub 저장소에 ZIP 파일이 정상적으로 업로드되었는지 확인해주세요.")
+    st.error(f"⚠️ 서버에서 '{ZIP_FILE_PATH}' 파일을 찾을 수 없습니다. GitHub 저장소에 ZIP 파일이 업로드되었는지 확인해주세요.")
