@@ -5,9 +5,7 @@ import io
 import copy
 import os
 import zipfile
-import re  # 태그 줄바꿈 강제 정렬을 위한 라이브러리 추가
 
-# page_icon은 이모티콘만 지원하므로 제거하여 기본값 유지
 st.set_page_config(page_title="염료 데이터 추출기", layout="wide")
 
 def clear_selection():
@@ -19,14 +17,12 @@ if 'selected_dyes' not in st.session_state:
 st.title(":material/palette: 단색 염료 데이터 추출기")
 st.write(":material/arrow_back: **왼쪽 사이드바**에서 염료군(그룹)을 선택하거나 검색하여 염료를 장바구니에 담으세요.")
 
-# 1. 깃허브에 업로드할 ZIP 파일 목록
 AVAILABLE_FILES = {
         "Disperse Interlock": "Disperse Interlock.zip",
         "Disperse Woven": "Disperse Woven.zip",
         "Reactive": "Reactive.zip"
 }
 
-# 엑셀 매핑 함수
 @st.cache_data
 def load_excel_mapping(db_name):
     mapping = {}
@@ -78,7 +74,6 @@ def load_excel_mapping(db_name):
         
     return mapping, order_map, group_map
 
-# Datacolor QTX 포맷 파일 생성 함수
 def generate_qtx_files(selected_pids, root, dye_mapping):
     qtx_dict = {} 
     
@@ -166,9 +161,6 @@ def generate_qtx_files(selected_pids, root, dye_mapping):
             
     return qtx_dict
 
-# ==========================================
-# ⬅️ 왼쪽 사이드바 영역
-# ==========================================
 st.sidebar.header(":material/folder_open: 데이터베이스 선택")
 selected_db_name = st.sidebar.selectbox(
     "사용할 염료 데이터베이스를 선택하세요:",
@@ -280,9 +272,6 @@ if os.path.exists(ZIP_FILE_PATH):
                     args=(pid,)
                 )
 
-            # ==========================================
-            # ➡ 메인 화면 영역
-            # ==========================================
             st.success(f":material/check_circle: **{selected_db_name}** 데이터베이스 로드 완료! 전체 {len(dye_mapping)}개의 염료 중 현재 **{len(st.session_state.selected_dyes)}**개를 선택(장바구니에 담음)했습니다.")
             
             if st.session_state.selected_dyes:
@@ -305,7 +294,6 @@ if os.path.exists(ZIP_FILE_PATH):
                 value=f"{selected_db_name}_Extract"
             )
             
-            # 💡 실무 편의를 위해 '600'을 기본 선택값(index=0)으로 설정
             target_machine = st.radio(
                 "기기 호환성 변환 (거래처 배포 시 범용인 'Datacolor 600'을 권장합니다):",
                 ["Datacolor 600 (범용/거래처 배포용)", "Datacolor 800", "Datacolor 1000", "변환 안 함 (원본 유지)"],
@@ -317,7 +305,6 @@ if os.path.exists(ZIP_FILE_PATH):
             
             col_btn1, col_btn2 = st.columns(2)
 
-            # XML 다운로드 로직
             with col_btn1:
                 if st.button(":material/rocket_launch: 선택 항목을 XML 파일로 묶어서 추출하기", use_container_width=True):
                     if not st.session_state.selected_dyes:
@@ -362,7 +349,6 @@ if os.path.exists(ZIP_FILE_PATH):
                                             if elem.text == old_id:
                                                 elem.text = new_set_name
 
-                            # 기기 호환성(MODEL) 강제 변환
                             if target_machine != "변환 안 함 (원본 유지)":
                                 if "600" in target_machine:
                                     new_model = "600"
@@ -376,17 +362,14 @@ if os.path.exists(ZIP_FILE_PATH):
                                     if model_node is not None:
                                         model_node.text = new_model
 
-                            # 💡 파싱 에러(Sybase 병합 버그) 완벽 차단을 위한 텍스트 재정렬 강제화
+                            # 💡 핵심 수정 사항: Sybase 파서 붕괴 방지를 위해 강제 Regex 포맷팅 제거
+                            # ElementTree 원본 포맷 유지 및 빈 태그 축약 방지(short_empty_elements=False)
                             xml_str = ET.tostring(new_root, encoding='ISO-8859-1', xml_declaration=False, short_empty_elements=False).decode('ISO-8859-1')
                             
-                            # 기존에 불필요하게 남은 엉성한 공백/줄바꿈을 싹 다 지우고, 무조건 태그 단위(><)로 \r\n 꽂아 넣기
-                            xml_str = re.sub(r'>\s+<', '><', xml_str)
-                            xml_str = xml_str.replace('><', '>\r\n<')
-                            
-                            # Datacolor 구형 프로그램은 type="table"에 띄어쓰기가 없으면 테이블로 인식 못할 때가 있음
                             xml_str = xml_str.replace('type="table"', 'type = "table"')
 
-                            final_xml = '<?xml version="1.0" encoding="ISO-8859-1" standalone="yes"?>\r\n' + xml_str
+                            # 정확하고 깔끔한 최상단 단일 헤더 삽입
+                            final_xml = '<?xml version="1.0" encoding="ISO-8859-1" standalone="yes"?>\n' + xml_str
                             xml_buffer = io.BytesIO(final_xml.encode('ISO-8859-1'))
 
                         st.download_button(
@@ -398,7 +381,6 @@ if os.path.exists(ZIP_FILE_PATH):
                             use_container_width=True
                         )
 
-            # QTX 다중 파일(ZIP) 다운로드 로직
             with col_btn2:
                 if st.button(":material/bar_chart: 선택 항목을 개별 QTX 파일로 추출하기", use_container_width=True):
                     if not st.session_state.selected_dyes:
