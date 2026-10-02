@@ -303,6 +303,14 @@ if os.path.exists(ZIP_FILE_PATH):
                 "Datacolor에 표시될 완전히 새로운 염료 세트 이름 (기존 DB에 덮어쓰기를 방지합니다):", 
                 value=f"{selected_db_name}_Extract"
             )
+            
+            # 💡 기기 호환성 변환 옵션 추가
+            target_machine = st.radio(
+                "기기 호환성 변환 (XML을 불러올 Datacolor 장비 모델에 맞게 선택하세요):",
+                ["변환 안 함 (원본 유지)", "Datacolor 600", "Datacolor 800", "Datacolor 1000"],
+                horizontal=True
+            )
+            
             st.markdown("<br>", unsafe_allow_html=True)
             
             col_btn1, col_btn2 = st.columns(2)
@@ -331,7 +339,7 @@ if os.path.exists(ZIP_FILE_PATH):
                                 if child in parent:
                                     parent.remove(child)
                                     
-                            # 2. 새로운 세트 이름(ID)으로 내부 연결고리 일괄 덮어쓰기
+                            # 2. 새로운 세트 이름(ID) 덮어쓰기
                             if new_set_name:
                                 colorant_set_node = None
                                 for elem in new_root.iter('ColorantSet'):
@@ -354,7 +362,15 @@ if os.path.exists(ZIP_FILE_PATH):
                                             if elem.text == old_id:
                                                 elem.text = new_set_name
 
-                            # 3. 💡 이중 선언 방지: xml_declaration=False 옵션 추가
+                            # 3. 💡 기기 호환성(MODEL) 강제 변환
+                            if target_machine != "변환 안 함 (원본 유지)":
+                                new_model = target_machine.replace("Datacolor ", "")
+                                for inst in new_root.iter('Instrument'):
+                                    model_node = inst.find('MODEL')
+                                    if model_node is not None:
+                                        model_node.text = new_model
+
+                            # 4. XML 선언 이중 삽입 방지 (xml_declaration=False 처리 후 강제 삽입)
                             xml_str = ET.tostring(new_root, encoding='ISO-8859-1', xml_declaration=False).decode('ISO-8859-1')
                             final_xml = '<?xml version="1.0" encoding="ISO-8859-1" standalone="yes"?>\n' + xml_str
                             xml_buffer = io.BytesIO(final_xml.encode('ISO-8859-1'))
