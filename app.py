@@ -25,7 +25,7 @@ AVAILABLE_FILES = {
         "Reactive": "Reactive.zip"
 }
 
-# 엑셀 매핑 함수
+# 엑셀 매핑 및 순서 불러오기 함수
 @st.cache_data
 def load_excel_mapping(db_name):
     mapping = {}
@@ -304,7 +304,6 @@ if os.path.exists(ZIP_FILE_PATH):
                 value=f"{selected_db_name}_Extract"
             )
             
-            # 💡 기기 호환성 변환 옵션 추가
             target_machine = st.radio(
                 "기기 호환성 변환 (XML을 불러올 Datacolor 장비 모델에 맞게 선택하세요):",
                 ["변환 안 함 (원본 유지)", "Datacolor 600", "Datacolor 800", "Datacolor 1000"],
@@ -325,7 +324,6 @@ if os.path.exists(ZIP_FILE_PATH):
                             new_root = copy.deepcopy(root)
                             elements_to_remove = []
 
-                            # 1. 원하지 않는 염료 삭제 로직
                             for parent in new_root.iter():
                                 for child in list(parent):
                                     if child.tag in ['Product', 'Dyestuff', 'Calibration']:
@@ -339,7 +337,6 @@ if os.path.exists(ZIP_FILE_PATH):
                                 if child in parent:
                                     parent.remove(child)
                                     
-                            # 2. 새로운 세트 이름(ID) 덮어쓰기
                             if new_set_name:
                                 colorant_set_node = None
                                 for elem in new_root.iter('ColorantSet'):
@@ -362,7 +359,6 @@ if os.path.exists(ZIP_FILE_PATH):
                                             if elem.text == old_id:
                                                 elem.text = new_set_name
 
-                            # 3. 💡 기기 호환성(MODEL) 강제 변환
                             if target_machine != "변환 안 함 (원본 유지)":
                                 new_model = target_machine.replace("Datacolor ", "")
                                 for inst in new_root.iter('Instrument'):
@@ -370,9 +366,9 @@ if os.path.exists(ZIP_FILE_PATH):
                                     if model_node is not None:
                                         model_node.text = new_model
 
-                            # 4. XML 선언 이중 삽입 방지 (xml_declaration=False 처리 후 강제 삽입)
-                            xml_str = ET.tostring(new_root, encoding='ISO-8859-1', xml_declaration=False).decode('ISO-8859-1')
-                            final_xml = '<?xml version="1.0" encoding="ISO-8859-1" standalone="yes"?>\n' + xml_str
+                            # 💡 핵심 수정 사항: 구형 파서 호환성을 위해 빈 태그 단축(self-closing) 방지
+                            xml_str = ET.tostring(new_root, encoding='ISO-8859-1', xml_declaration=False, short_empty_elements=False).decode('ISO-8859-1')
+                            final_xml = '<?xml version="1.0" encoding="ISO-8859-1" standalone="yes"?>\r\n' + xml_str
                             xml_buffer = io.BytesIO(final_xml.encode('ISO-8859-1'))
 
                         st.download_button(
