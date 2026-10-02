@@ -6,7 +6,7 @@ import copy
 import os
 import zipfile
 
-# page_icon은 이모티콘만 지원하므로 제거하여 기본값(깔끔한 탭) 유지
+# page_icon은 이모티콘만 지원하므로 제거하여 기본값 유지
 st.set_page_config(page_title="염료 데이터 추출기", layout="wide")
 
 def clear_selection():
@@ -16,7 +16,7 @@ if 'selected_dyes' not in st.session_state:
     st.session_state.selected_dyes = set()
 
 st.title(":material/palette: 단색 염료 데이터 추출기")
-st.write(":material/arrow_back: **왼쪽 사이드바**에서 사용할 DB를 선택하고 염료를 검색하여 추출하세요.")
+st.write(":material/arrow_back: **왼쪽 사이드바**에서 염료군(그룹)을 선택하거나 검색하여 염료를 장바구니에 담으세요.")
 
 # 1. 깃허브에 업로드할 ZIP 파일 목록
 AVAILABLE_FILES = {
@@ -25,45 +25,60 @@ AVAILABLE_FILES = {
         "Reactive": "Reactive.zip"
 }
 
-# 엑셀 매핑 및 순서 불러오기 함수
+# 💡 엑셀 매핑 함수 (염료군 정보 추가 추출)
 @st.cache_data
 def load_excel_mapping(db_name):
     mapping = {}
     order_map = {} 
+    group_map = {} # 염료군 정보를 담을 딕셔너리
+    
     try:
         if db_name == "Reactive" and os.path.exists("dye_list.xlsx"):
+            # Reactive: B열(1) XML명, C열(2) 오리지널명, D열(3) 염료군
             df = pd.read_excel("dye_list.xlsx", header=None)
             for idx, row in df.iterrows():
                 if len(row) > 2 and pd.notna(row[1]) and pd.notna(row[2]):
                     xml_name = str(row[1]).strip()
                     orig_name = str(row[2]).strip()
+                    group_name = str(row[3]).strip() if len(row) > 3 and pd.notna(row[3]) else "미지정"
+                    
                     mapping[xml_name] = orig_name
                     if orig_name not in order_map:
                         order_map[orig_name] = idx
+                    group_map[orig_name] = group_name
 
         elif db_name == "Disperse Interlock" and os.path.exists("dis_dye_list.xlsx"):
+            # Disperse Interlock: B열(1) XML명, D열(3) 오리지널명, E열(4) 염료군
             df = pd.read_excel("dis_dye_list.xlsx", header=None)
             for idx, row in df.iterrows():
                 if len(row) > 3 and pd.notna(row[1]) and pd.notna(row[3]):
                     xml_name = str(row[1]).strip()
                     orig_name = str(row[3]).strip()
+                    group_name = str(row[4]).strip() if len(row) > 4 and pd.notna(row[4]) else "미지정"
+                    
                     mapping[xml_name] = orig_name
                     if orig_name not in order_map:
                         order_map[orig_name] = idx
+                    group_map[orig_name] = group_name
 
         elif db_name == "Disperse Woven" and os.path.exists("dis_dye_list.xlsx"):
+            # Disperse Woven: C열(2) XML명, D열(3) 오리지널명, E열(4) 염료군
             df = pd.read_excel("dis_dye_list.xlsx", header=None)
             for idx, row in df.iterrows():
                 if len(row) > 3 and pd.notna(row[2]) and pd.notna(row[3]):
                     xml_name = str(row[2]).strip()
                     orig_name = str(row[3]).strip()
+                    group_name = str(row[4]).strip() if len(row) > 4 and pd.notna(row[4]) else "미지정"
+                    
                     mapping[xml_name] = orig_name
                     if orig_name not in order_map:
                         order_map[orig_name] = idx
+                    group_map[orig_name] = group_name
+                    
     except Exception as e:
         st.sidebar.warning(f":material/warning: 엑셀 매핑 파일 읽기 오류: {e}")
         
-    return mapping, order_map
+    return mapping, order_map, group_map
 
 # Datacolor QTX 포맷 파일 생성 함수
 def generate_qtx_files(selected_pids, root, dye_mapping):
@@ -168,7 +183,7 @@ st.sidebar.markdown("---")
 
 if os.path.exists(ZIP_FILE_PATH):
     try:
-        excel_name_map, excel_order_map = load_excel_mapping(selected_db_name)
+        excel_name_map, excel_order_map, excel_group_map = load_excel_mapping(selected_db_name)
 
         with zipfile.ZipFile(ZIP_FILE_PATH, 'r') as z:
             xml_filename = z.namelist()[0]
@@ -200,13 +215,41 @@ if os.path.exists(ZIP_FILE_PATH):
         if not dye_mapping:
             st.error(":material/error: 염료를 찾을 수 없습니다. XML 파일 구조를 확인해주세요.")
         else:
-            st.sidebar.header(":material/search: 염료 검색 및 선택")
-            search_query = st.sidebar.text_input("오리지널 염료명 검색 (예: APEX, ECO 등)", "")
+            # 💡 염료군(그룹) 고유값 목록 생성
+            unique_groups = set()
+            for pid, display_name in dye_mapping.items():
+                grp = excel_group_map.get(display_name, "미지정")
+                unique_groups.add(grp)
             
-            filtered_pids = [pid for pid, display_name in dye_mapping.items() if search_query.lower() in display_name.lower()]
+            st.sidebar.header(":material/search: 염료 검색 및 필터")
+            
+            # 💡 염료군(그룹) 다중 선택 필터 추가
+            selected_groups = st.sidebar.multiselect(
+                "염료군(그룹) 필터:",
+                options=sorted(list(unique_groups)),
+                default=[],
+                help="원하는 염료군을 선택하면 해당 그룹의 염료만 나타납니다."
+            )
+            
+            search_query = st.sidebar.text_input("개별 염료명 검색 (예: APEX, ECO 등)", "")
+            
+            # 필터링 로직 (그룹 필터 + 텍스트 검색)
+            filtered_pids = []
+            for pid, display_name in dye_mapping.items():
+                grp = excel_group_map.get(display_name, "미지정")
+                
+                # 그룹 필터가 비어있으면 전체 통과, 아니면 선택된 그룹에 속해야 통과
+                group_match = True if not selected_groups else (grp in selected_groups)
+                # 텍스트 검색어 통과 여부
+                name_match = search_query.lower() in display_name.lower()
+                
+                if group_match and name_match:
+                    filtered_pids.append(pid)
+                    
+            # 엑셀 순서에 맞게 정렬
             filtered_pids.sort(key=lambda pid: (excel_order_map.get(dye_mapping[pid], float('inf')), dye_mapping[pid]))
             
-            st.sidebar.markdown(f"**검색 결과: {len(filtered_pids)}개**")
+            st.sidebar.markdown(f"**필터링된 결과: {len(filtered_pids)}개**")
 
             def select_all_filtered(pids):
                 for pid in pids:
@@ -225,39 +268,45 @@ if os.path.exists(ZIP_FILE_PATH):
                     st.session_state.selected_dyes.discard(pid)
 
             col1, col2 = st.sidebar.columns(2)
-            col1.button(":material/done_all: 전체 선택", on_click=select_all_filtered, args=(filtered_pids,))
-            col2.button(":material/clear: 전체 해제", on_click=deselect_all_filtered, args=(filtered_pids,))
+            col1.button(":material/done_all: 결과 전체 선택", on_click=select_all_filtered, args=(filtered_pids,))
+            col2.button(":material/clear: 결과 전체 해제", on_click=deselect_all_filtered, args=(filtered_pids,))
 
             st.sidebar.markdown("---")
             
-            st.sidebar.write(f":material/arrow_downward: **[{selected_db_name}] 염료 목록 (엑셀 순서 정렬)**")
+            st.sidebar.write(f":material/arrow_downward: **[{selected_db_name}] 필터링된 염료 목록**")
             for pid in filtered_pids:
                 display_name = dye_mapping[pid]
+                grp = excel_group_map.get(display_name, "미지정")
+                
+                # 라벨에 [그룹명] 염료명 형태로 직관적으로 표시
+                label_text = f"[{grp}] {display_name}"
                 
                 if f"chk_{pid}" not in st.session_state:
                     st.session_state[f"chk_{pid}"] = (pid in st.session_state.selected_dyes)
 
                 st.sidebar.checkbox(
-                    display_name, 
+                    label_text, 
                     key=f"chk_{pid}",
                     on_change=toggle_dye,
                     args=(pid,)
                 )
 
             # ==========================================
-            # ➡️️ 메인 화면 영역
+            # ➡ 메인 화면 영역
             # ==========================================
-            st.success(f":material/check_circle: **{selected_db_name}** 데이터베이스 로드 완료! 전체 {len(dye_mapping)}개의 염료 중 현재 **{len(st.session_state.selected_dyes)}**개를 선택했습니다.")
+            st.success(f":material/check_circle: **{selected_db_name}** 데이터베이스 로드 완료! 전체 {len(dye_mapping)}개의 염료 중 현재 **{len(st.session_state.selected_dyes)}**개를 선택(장바구니에 담음)했습니다.")
             
             if st.session_state.selected_dyes:
-                with st.expander(":material/push_pin: 현재 선택된 염료 목록 보기 (클릭하여 펼치기)", expanded=True):
+                with st.expander(":material/shopping_cart: 장바구니에 담긴 염료 목록 보기 (클릭하여 펼치기)", expanded=True):
                     sorted_selected = sorted(
                         list(st.session_state.selected_dyes), 
                         key=lambda x: (excel_order_map.get(dye_mapping[x], float('inf')), dye_mapping[x])
                     )
                     
                     for selected_pid in sorted_selected:
-                        st.write(f"- **{dye_mapping[selected_pid]}** <span style='color:gray; font-size:0.8em;'>(내부 XML명: {selected_pid})</span>", unsafe_allow_html=True)
+                        display_name = dye_mapping[selected_pid]
+                        grp = excel_group_map.get(display_name, "미지정")
+                        st.write(f"- **[{grp}] {display_name}** <span style='color:gray; font-size:0.8em;'>(내부 XML명: {selected_pid})</span>", unsafe_allow_html=True)
             
             st.markdown("---")
             
@@ -265,7 +314,7 @@ if os.path.exists(ZIP_FILE_PATH):
 
             # XML 다운로드 로직
             with col_btn1:
-                if st.button(":material/rocket_launch: XML 파일로 추출하기", use_container_width=True):
+                if st.button(":material/rocket_launch: 선택 항목을 XML 파일로 묶어서 추출하기", use_container_width=True):
                     if not st.session_state.selected_dyes:
                         st.warning(":material/warning: 왼쪽 사이드바에서 먼저 하나 이상의 염료를 체크해주세요.")
                     else:
@@ -303,7 +352,7 @@ if os.path.exists(ZIP_FILE_PATH):
 
             # QTX 다중 파일(ZIP) 다운로드 로직
             with col_btn2:
-                if st.button(":material/bar_chart: QTX 파일로 추출하기", use_container_width=True):
+                if st.button(":material/bar_chart: 선택 항목을 개별 QTX 파일로 추출하기", use_container_width=True):
                     if not st.session_state.selected_dyes:
                         st.warning(":material/warning: 왼쪽 사이드바에서 먼저 하나 이상의 염료를 체크해주세요.")
                     else:
