@@ -5,6 +5,7 @@ import io
 import copy
 import os
 import zipfile
+import re  # 태그 줄바꿈 강제 정렬을 위한 라이브러리 추가
 
 # page_icon은 이모티콘만 지원하므로 제거하여 기본값 유지
 st.set_page_config(page_title="염료 데이터 추출기", layout="wide")
@@ -25,7 +26,7 @@ AVAILABLE_FILES = {
         "Reactive": "Reactive.zip"
 }
 
-# 엑셀 매핑 및 순서 불러오기 함수
+# 엑셀 매핑 함수
 @st.cache_data
 def load_excel_mapping(db_name):
     mapping = {}
@@ -304,11 +305,11 @@ if os.path.exists(ZIP_FILE_PATH):
                 value=f"{selected_db_name}_Extract"
             )
             
-            # 💡 기기 호환성 변환 옵션 (600을 기본값으로, 라벨을 직관적으로 변경)
+            # 💡 실무 편의를 위해 '600'을 기본 선택값(index=0)으로 설정
             target_machine = st.radio(
-                "기기 호환성 변환 (거래처 배포 시 범용인 '600'을 권장합니다):",
+                "기기 호환성 변환 (거래처 배포 시 범용인 'Datacolor 600'을 권장합니다):",
                 ["Datacolor 600 (범용/거래처 배포용)", "Datacolor 800", "Datacolor 1000", "변환 안 함 (원본 유지)"],
-                index=0, # 첫 번째 항목인 600을 기본 체크 상태로 만듭니다.
+                index=0, 
                 horizontal=True
             )
             
@@ -361,9 +362,8 @@ if os.path.exists(ZIP_FILE_PATH):
                                             if elem.text == old_id:
                                                 elem.text = new_set_name
 
-                            # 3. 💡 기기 호환성(MODEL) 강제 변환
+                            # 기기 호환성(MODEL) 강제 변환
                             if target_machine != "변환 안 함 (원본 유지)":
-                                # "Datacolor 600 (범용...)" 이라는 글자에서 숫자만 추출
                                 if "600" in target_machine:
                                     new_model = "600"
                                 elif "800" in target_machine:
@@ -376,8 +376,16 @@ if os.path.exists(ZIP_FILE_PATH):
                                     if model_node is not None:
                                         model_node.text = new_model
 
-                            # 💡 핵심 수정 사항: 구형 파서 호환성을 위해 빈 태그 단축(self-closing) 방지
+                            # 💡 파싱 에러(Sybase 병합 버그) 완벽 차단을 위한 텍스트 재정렬 강제화
                             xml_str = ET.tostring(new_root, encoding='ISO-8859-1', xml_declaration=False, short_empty_elements=False).decode('ISO-8859-1')
+                            
+                            # 기존에 불필요하게 남은 엉성한 공백/줄바꿈을 싹 다 지우고, 무조건 태그 단위(><)로 \r\n 꽂아 넣기
+                            xml_str = re.sub(r'>\s+<', '><', xml_str)
+                            xml_str = xml_str.replace('><', '>\r\n<')
+                            
+                            # Datacolor 구형 프로그램은 type="table"에 띄어쓰기가 없으면 테이블로 인식 못할 때가 있음
+                            xml_str = xml_str.replace('type="table"', 'type = "table"')
+
                             final_xml = '<?xml version="1.0" encoding="ISO-8859-1" standalone="yes"?>\r\n' + xml_str
                             xml_buffer = io.BytesIO(final_xml.encode('ISO-8859-1'))
 
