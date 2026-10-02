@@ -2,9 +2,10 @@ import streamlit as st
 import xml.etree.ElementTree as ET
 import pandas as pd
 import io
+import copy
 import os
 import zipfile
-import re  # 순수 텍스트 자르기를 위한 모듈
+import re
 
 st.set_page_config(page_title="염료 데이터 추출기", layout="wide")
 
@@ -17,14 +18,12 @@ if 'selected_dyes' not in st.session_state:
 st.title(":material/palette: 단색 염료 데이터 추출기")
 st.write(":material/arrow_back: **왼쪽 사이드바**에서 염료군(그룹)을 선택하거나 검색하여 염료를 장바구니에 담으세요.")
 
-# 1. 깃허브에 업로드할 ZIP 파일 목록
 AVAILABLE_FILES = {
         "Disperse Interlock": "Disperse Interlock.zip",
         "Disperse Woven": "Disperse Woven.zip",
         "Reactive": "Reactive.zip"
 }
 
-# 엑셀 매핑 함수
 @st.cache_data
 def load_excel_mapping(db_name):
     mapping = {}
@@ -76,7 +75,6 @@ def load_excel_mapping(db_name):
         
     return mapping, order_map, group_map
 
-# Datacolor QTX 포맷 파일 생성 함수
 def generate_qtx_files(selected_pids, root, dye_mapping):
     qtx_dict = {} 
     
@@ -164,9 +162,6 @@ def generate_qtx_files(selected_pids, root, dye_mapping):
             
     return qtx_dict
 
-# ==========================================
-# ⬅️ 왼쪽 사이드바 영역
-# ==========================================
 st.sidebar.header(":material/folder_open: 데이터베이스 선택")
 selected_db_name = st.sidebar.selectbox(
     "사용할 염료 데이터베이스를 선택하세요:",
@@ -184,7 +179,6 @@ if os.path.exists(ZIP_FILE_PATH):
         with zipfile.ZipFile(ZIP_FILE_PATH, 'r') as z:
             xml_filename = z.namelist()[0]
             with z.open(xml_filename) as xml_file:
-                # 데이터 표시용 파싱 (추출용으로는 쓰지 않음)
                 tree = ET.parse(xml_file)
                 root = tree.getroot()
 
@@ -279,9 +273,6 @@ if os.path.exists(ZIP_FILE_PATH):
                     args=(pid,)
                 )
 
-            # ==========================================
-            # ➡ 메인 화면 영역
-            # ==========================================
             st.success(f":material/check_circle: **{selected_db_name}** 데이터베이스 로드 완료! 전체 {len(dye_mapping)}개의 염료 중 현재 **{len(st.session_state.selected_dyes)}**개를 선택(장바구니에 담음)했습니다.")
             
             if st.session_state.selected_dyes:
@@ -320,41 +311,73 @@ if os.path.exists(ZIP_FILE_PATH):
                     if not st.session_state.selected_dyes:
                         st.warning(":material/warning: 왼쪽 사이드바에서 먼저 하나 이상의 염료를 체크해주세요.")
                     else:
-                        with st.spinner("XML 원본 텍스트를 파쇄 후 재조립 중입니다..."):
-                            
-                            # 💡 1. ZIP 안에서 XML을 파이썬 객체가 아닌 "순수 텍스트"로 가져옵니다.
-                            with zipfile.ZipFile(ZIP_FILE_PATH, 'r') as z:
-                                xml_filename = z.namelist()[0]
-                                with z.open(xml_filename) as xml_file:
-                                    xml_text = xml_file.read().decode('ISO-8859-1')
+                        with st.spinner("최종 C플랜: 데이터 완벽 정리 및 구형 파서 호환 포맷팅 중..."):
+                            new_root = copy.deepcopy(root)
                             
                             kept_pids = st.session_state.selected_dyes.copy()
                             kept_pids.add('H2O')
 
-                            # 💡 2. 파이썬 파서를 안 쓰고 정규식으로 메모장처럼 텍스트 블록만 잘라냅니다!
-                            # 원본의 띄어쓰기, 줄바꿈, 빈 태그(<Blob></Blob>) 등 모든 것이 완벽하게 유지됩니다.
-                            for tag in ['Product', 'Dyestuff', 'Calibration']:
-                                pattern = f'<{tag}[\\s>].*?</{tag}>'
-                                def repl(match):
-                                    block = match.group(0)
-                                    # 해당 블록 안에 우리가 보존해야 할 PRODUCT_ID가 있는지 확인
-                                    pid_match = re.search(r'<PRODUCT_ID>\s*(.*?)\s*</PRODUCT_ID>', block)
-                                    if pid_match:
-                                        pid = pid_match.group(1).strip()
-                                        if pid in kept_pids:
-                                            return block  # 유지
-                                        else:
-                                            return ''     # 가차없이 텍스트 삭제
-                                    return block
-                                
-                                xml_text = re.sub(pattern, repl, xml_text, flags=re.DOTALL)
-                                
-                            # 3. 새로운 세트 이름 덮어쓰기 (덮어쓰기 에러 방지)
-                            if new_set_name:
-                                xml_text = re.sub(r'<COLORANTSET_ID>.*?</COLORANTSET_ID>', f'<COLORANTSET_ID>{new_set_name}</COLORANTSET_ID>', xml_text)
-                                xml_text = re.sub(r'<COLORANTSET_NAME>.*?</COLORANTSET_NAME>', f'<COLORANTSET_NAME>{new_set_name}</COLORANTSET_NAME>', xml_text)
+                            kept_sample_ids = set()
+                            elements_to_remove = []
 
-                            # 4. 기기 호환성(MODEL) 강제 변환
+                            # 1. 유지해야 할 샘플(Sample) ID 추적
+                            for serie in new_root.iter('CalibrationSerie'):
+                                for comp in serie.iter('CalibrationSerieComp'):
+                                    pid_node = comp.find('PRODUCT_ID')
+                                    if pid_node is not None and pid_node.text and pid_node.text.strip() in kept_pids:
+                                        s_id_node = serie.find('SAMPLEID')
+                                        if s_id_node is not None and s_id_node.text:
+                                            kept_sample_ids.add(s_id_node.text.strip())
+
+                            # 2. 불필요한 염료 및 연결고리 찌꺼기 추적
+                            for parent in new_root.iter():
+                                for child in list(parent):
+                                    if child.tag in ['Product', 'Dyestuff', 'Calibration']:
+                                        pid_node = child.find('PRODUCT_ID')
+                                        if pid_node is not None and pid_node.text:
+                                            if pid_node.text.strip() not in kept_pids:
+                                                elements_to_remove.append((parent, child))
+                                                
+                                    elif child.tag == 'CalibrationSerie':
+                                        s_id_node = child.find('SAMPLEID')
+                                        if s_id_node is not None and s_id_node.text:
+                                            if s_id_node.text.strip() not in kept_sample_ids:
+                                                elements_to_remove.append((parent, child))
+                                                
+                                    elif child.tag in ['Sample', 'SubstrateDelivery']:
+                                        s_id_node = child.find('SAMPLEID')
+                                        if s_id_node is not None and s_id_node.text:
+                                            if s_id_node.text.strip() not in kept_sample_ids:
+                                                elements_to_remove.append((parent, child))
+
+                            # 3. 찌꺼기 삭제
+                            for parent, child in elements_to_remove:
+                                if child in parent:
+                                    parent.remove(child)
+                                    
+                            # 4. 세트 이름 및 기기 모델 변경
+                            if new_set_name:
+                                colorant_set_node = None
+                                for elem in new_root.iter('ColorantSet'):
+                                    colorant_set_node = elem
+                                    break
+                                    
+                                if colorant_set_node is not None:
+                                    old_id = ""
+                                    id_node = colorant_set_node.find('COLORANTSET_ID')
+                                    if id_node is not None:
+                                        old_id = id_node.text
+                                        id_node.text = new_set_name
+                                        
+                                    name_node = colorant_set_node.find('COLORANTSET_NAME')
+                                    if name_node is not None:
+                                        name_node.text = new_set_name
+                                        
+                                    if old_id:
+                                        for elem in new_root.iter('COLORANTSET_ID'):
+                                            if elem.text == old_id:
+                                                elem.text = new_set_name
+
                             if target_machine != "변환 안 함 (원본 유지)":
                                 if "600" in target_machine:
                                     new_model = "600"
@@ -362,10 +385,30 @@ if os.path.exists(ZIP_FILE_PATH):
                                     new_model = "800"
                                 elif "1000" in target_machine:
                                     new_model = "1000"
-                                xml_text = re.sub(r'<MODEL>.*?</MODEL>', f'<MODEL>{new_model}</MODEL>', xml_text)
+                                    
+                                for inst in new_root.iter('Instrument'):
+                                    model_node = inst.find('MODEL')
+                                    if model_node is not None:
+                                        model_node.text = new_model
 
-                            # 순수 텍스트를 그대로 파일로 내보냄
-                            xml_buffer = io.BytesIO(xml_text.encode('ISO-8859-1'))
+                            # 💡 5. [플랜 C] 태그 엉킴(Sybase 에러) 원천 차단을 위한 최종 텍스트 성형
+                            xml_str = ET.tostring(new_root, encoding='ISO-8859-1', xml_declaration=False, short_empty_elements=False).decode('ISO-8859-1')
+                            
+                            # (1) 데이터 사이에 남아있는 불규칙한 공백을 완전히 제거 (초기화)
+                            xml_str = re.sub(r'>\s+<', '><', xml_str)
+                            
+                            # (2) 600 기종이 무조건 읽을 수 있도록 '모든' 태그 사이에 윈도우 엔터키(\r\n) 강제 주입
+                            # 이렇게 하면 <A>와 <B>가 절대 달라붙을 일이 없습니다.
+                            xml_str = xml_str.replace('><', '>\r\n<')
+                            
+                            # (3) <Blob></Blob> 처럼 내용이 비어있는 태그 안에 들어간 엔터키는 다시 빼서 복구
+                            xml_str = re.sub(r'<([a-zA-Z0-9_:-]+)([^>]*)>\r\n</\1>', r'<\1\2></\1>', xml_str)
+                            
+                            # (4) 600 기종이 요구하는 특수 띄어쓰기 복구
+                            xml_str = xml_str.replace('type="table"', 'type = "table"')
+
+                            final_xml = '<?xml version="1.0" encoding="ISO-8859-1" standalone="yes"?>\r\n' + xml_str
+                            xml_buffer = io.BytesIO(final_xml.encode('ISO-8859-1'))
 
                         st.download_button(
                             label=f":material/download: {new_set_name}.xml 다운로드",
