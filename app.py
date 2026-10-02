@@ -6,7 +6,8 @@ import copy
 import os
 import zipfile
 
-st.set_page_config(page_title="염료 데이터 추출기", page_icon="🎨", layout="wide")
+# page_icon은 이모티콘만 지원하므로 제거하여 기본값 유지
+st.set_page_config(page_title="염료 데이터 추출기", layout="wide")
 
 def clear_selection():
     st.session_state.selected_dyes = set()
@@ -24,7 +25,7 @@ AVAILABLE_FILES = {
         "Reactive": "Reactive.zip"
 }
 
-# 엑셀 매핑 및 순서 불러오기 함수
+# 엑셀 매핑 함수
 @st.cache_data
 def load_excel_mapping(db_name):
     mapping = {}
@@ -297,7 +298,6 @@ if os.path.exists(ZIP_FILE_PATH):
             
             st.markdown("---")
             
-            # 💡 덮어쓰기 방지를 위한 새 이름 입력란 추가
             st.subheader(":material/settings: 데이터컬러 내보내기 설정")
             new_set_name = st.text_input(
                 "Datacolor에 표시될 완전히 새로운 염료 세트 이름 (기존 DB에 덮어쓰기를 방지합니다):", 
@@ -331,7 +331,7 @@ if os.path.exists(ZIP_FILE_PATH):
                                 if child in parent:
                                     parent.remove(child)
                                     
-                            # 2. 💡 새로운 세트 이름(ID)으로 내부 연결고리 일괄 덮어쓰기
+                            # 2. 새로운 세트 이름(ID)으로 내부 연결고리 일괄 덮어쓰기
                             if new_set_name:
                                 colorant_set_node = None
                                 for elem in new_root.iter('ColorantSet'):
@@ -349,14 +349,13 @@ if os.path.exists(ZIP_FILE_PATH):
                                     if name_node is not None:
                                         name_node.text = new_set_name
                                         
-                                    # 연관된 모든 Calibration의 COLORANTSET_ID 변경
                                     if old_id:
                                         for elem in new_root.iter('COLORANTSET_ID'):
                                             if elem.text == old_id:
                                                 elem.text = new_set_name
 
-                            # 3. 💡 Datacolor가 필수적으로 요구하는 표준 XML 헤더 강제 적용
-                            xml_str = ET.tostring(new_root, encoding='ISO-8859-1').decode('ISO-8859-1')
+                            # 3. 💡 이중 선언 방지: xml_declaration=False 옵션 추가
+                            xml_str = ET.tostring(new_root, encoding='ISO-8859-1', xml_declaration=False).decode('ISO-8859-1')
                             final_xml = '<?xml version="1.0" encoding="ISO-8859-1" standalone="yes"?>\n' + xml_str
                             xml_buffer = io.BytesIO(final_xml.encode('ISO-8859-1'))
 
