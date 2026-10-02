@@ -6,8 +6,7 @@ import copy
 import os
 import zipfile
 
-# page_icon은 이모티콘만 지원하므로 제거하여 기본값 유지
-st.set_page_config(page_title="염료 데이터 추출기", layout="wide")
+st.set_page_config(page_title="염료 데이터 추출기", page_icon="🎨", layout="wide")
 
 def clear_selection():
     st.session_state.selected_dyes = set()
@@ -25,16 +24,15 @@ AVAILABLE_FILES = {
         "Reactive": "Reactive.zip"
 }
 
-# 💡 엑셀 매핑 함수 (염료군 정보 추가 추출)
+# 엑셀 매핑 및 순서 불러오기 함수
 @st.cache_data
 def load_excel_mapping(db_name):
     mapping = {}
     order_map = {} 
-    group_map = {} # 염료군 정보를 담을 딕셔너리
+    group_map = {} 
     
     try:
         if db_name == "Reactive" and os.path.exists("dye_list.xlsx"):
-            # Reactive: B열(1) XML명, C열(2) 오리지널명, D열(3) 염료군
             df = pd.read_excel("dye_list.xlsx", header=None)
             for idx, row in df.iterrows():
                 if len(row) > 2 and pd.notna(row[1]) and pd.notna(row[2]):
@@ -48,7 +46,6 @@ def load_excel_mapping(db_name):
                     group_map[orig_name] = group_name
 
         elif db_name == "Disperse Interlock" and os.path.exists("dis_dye_list.xlsx"):
-            # Disperse Interlock: B열(1) XML명, D열(3) 오리지널명, E열(4) 염료군
             df = pd.read_excel("dis_dye_list.xlsx", header=None)
             for idx, row in df.iterrows():
                 if len(row) > 3 and pd.notna(row[1]) and pd.notna(row[3]):
@@ -62,7 +59,6 @@ def load_excel_mapping(db_name):
                     group_map[orig_name] = group_name
 
         elif db_name == "Disperse Woven" and os.path.exists("dis_dye_list.xlsx"):
-            # Disperse Woven: C열(2) XML명, D열(3) 오리지널명, E열(4) 염료군
             df = pd.read_excel("dis_dye_list.xlsx", header=None)
             for idx, row in df.iterrows():
                 if len(row) > 3 and pd.notna(row[2]) and pd.notna(row[3]):
@@ -215,7 +211,6 @@ if os.path.exists(ZIP_FILE_PATH):
         if not dye_mapping:
             st.error(":material/error: 염료를 찾을 수 없습니다. XML 파일 구조를 확인해주세요.")
         else:
-            # 💡 염료군(그룹) 고유값 목록 생성
             unique_groups = set()
             for pid, display_name in dye_mapping.items():
                 grp = excel_group_map.get(display_name, "미지정")
@@ -223,7 +218,6 @@ if os.path.exists(ZIP_FILE_PATH):
             
             st.sidebar.header(":material/search: 염료 검색 및 필터")
             
-            # 💡 염료군(그룹) 다중 선택 필터 추가
             selected_groups = st.sidebar.multiselect(
                 "염료군(그룹) 필터:",
                 options=sorted(list(unique_groups)),
@@ -233,20 +227,15 @@ if os.path.exists(ZIP_FILE_PATH):
             
             search_query = st.sidebar.text_input("개별 염료명 검색 (예: APEX, ECO 등)", "")
             
-            # 필터링 로직 (그룹 필터 + 텍스트 검색)
             filtered_pids = []
             for pid, display_name in dye_mapping.items():
                 grp = excel_group_map.get(display_name, "미지정")
-                
-                # 그룹 필터가 비어있으면 전체 통과, 아니면 선택된 그룹에 속해야 통과
                 group_match = True if not selected_groups else (grp in selected_groups)
-                # 텍스트 검색어 통과 여부
                 name_match = search_query.lower() in display_name.lower()
                 
                 if group_match and name_match:
                     filtered_pids.append(pid)
                     
-            # 엑셀 순서에 맞게 정렬
             filtered_pids.sort(key=lambda pid: (excel_order_map.get(dye_mapping[pid], float('inf')), dye_mapping[pid]))
             
             st.sidebar.markdown(f"**필터링된 결과: {len(filtered_pids)}개**")
@@ -277,8 +266,6 @@ if os.path.exists(ZIP_FILE_PATH):
             for pid in filtered_pids:
                 display_name = dye_mapping[pid]
                 grp = excel_group_map.get(display_name, "미지정")
-                
-                # 라벨에 [그룹명] 염료명 형태로 직관적으로 표시
                 label_text = f"[{grp}] {display_name}"
                 
                 if f"chk_{pid}" not in st.session_state:
@@ -310,6 +297,14 @@ if os.path.exists(ZIP_FILE_PATH):
             
             st.markdown("---")
             
+            # 💡 덮어쓰기 방지를 위한 새 이름 입력란 추가
+            st.subheader(":material/settings: 데이터컬러 내보내기 설정")
+            new_set_name = st.text_input(
+                "Datacolor에 표시될 완전히 새로운 염료 세트 이름 (기존 DB에 덮어쓰기를 방지합니다):", 
+                value=f"{selected_db_name}_Extract"
+            )
+            st.markdown("<br>", unsafe_allow_html=True)
+            
             col_btn1, col_btn2 = st.columns(2)
 
             # XML 다운로드 로직
@@ -322,29 +317,53 @@ if os.path.exists(ZIP_FILE_PATH):
                             new_root = copy.deepcopy(root)
                             elements_to_remove = []
 
+                            # 1. 원하지 않는 염료 삭제 로직
                             for parent in new_root.iter():
                                 for child in list(parent):
                                     if child.tag in ['Product', 'Dyestuff', 'Calibration']:
                                         pid_node = child.find('PRODUCT_ID')
                                         if pid_node is not None and pid_node.text:
                                             pid = pid_node.text.strip()
-                                            
                                             if pid not in st.session_state.selected_dyes and pid != 'H2O':
                                                 elements_to_remove.append((parent, child))
 
                             for parent, child in elements_to_remove:
                                 if child in parent:
                                     parent.remove(child)
+                                    
+                            # 2. 💡 새로운 세트 이름(ID)으로 내부 연결고리 일괄 덮어쓰기
+                            if new_set_name:
+                                colorant_set_node = None
+                                for elem in new_root.iter('ColorantSet'):
+                                    colorant_set_node = elem
+                                    break
+                                    
+                                if colorant_set_node is not None:
+                                    old_id = ""
+                                    id_node = colorant_set_node.find('COLORANTSET_ID')
+                                    if id_node is not None:
+                                        old_id = id_node.text
+                                        id_node.text = new_set_name
+                                        
+                                    name_node = colorant_set_node.find('COLORANTSET_NAME')
+                                    if name_node is not None:
+                                        name_node.text = new_set_name
+                                        
+                                    # 연관된 모든 Calibration의 COLORANTSET_ID 변경
+                                    if old_id:
+                                        for elem in new_root.iter('COLORANTSET_ID'):
+                                            if elem.text == old_id:
+                                                elem.text = new_set_name
 
-                            new_tree = ET.ElementTree(new_root)
-                            xml_buffer = io.BytesIO()
-                            new_tree.write(xml_buffer, encoding='ISO-8859-1', xml_declaration=True)
-                            xml_buffer.seek(0)
+                            # 3. 💡 Datacolor가 필수적으로 요구하는 표준 XML 헤더 강제 적용
+                            xml_str = ET.tostring(new_root, encoding='ISO-8859-1').decode('ISO-8859-1')
+                            final_xml = '<?xml version="1.0" encoding="ISO-8859-1" standalone="yes"?>\n' + xml_str
+                            xml_buffer = io.BytesIO(final_xml.encode('ISO-8859-1'))
 
                         st.download_button(
-                            label=f":material/download: Filtered_{selected_db_name}.xml 다운로드",
+                            label=f":material/download: {new_set_name}.xml 다운로드",
                             data=xml_buffer,
-                            file_name=f"Filtered_{selected_db_name}.xml",
+                            file_name=f"{new_set_name}.xml",
                             mime="application/xml",
                             type="primary",
                             use_container_width=True
@@ -367,9 +386,9 @@ if os.path.exists(ZIP_FILE_PATH):
                             zip_buffer.seek(0)
                         
                         st.download_button(
-                            label=f":material/download: {selected_db_name}_QTX.zip 다운로드",
+                            label=f":material/download: {new_set_name}_QTX.zip 다운로드",
                             data=zip_buffer,
-                            file_name=f"{selected_db_name}_QTX.zip",
+                            file_name=f"{new_set_name}_QTX.zip",
                             mime="application/zip",
                             type="primary",
                             use_container_width=True
